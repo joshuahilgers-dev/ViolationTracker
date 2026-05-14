@@ -1,4 +1,6 @@
 const state = {
+  authConfig: null,
+  currentUser: null,
   students: [],
   infractionTypes: [],
   openActions: [],
@@ -15,6 +17,13 @@ const statusLabels = {
 };
 
 const els = {
+  loginScreen: document.querySelector("#login-screen"),
+  appShell: document.querySelector("#app-shell"),
+  googleSignin: document.querySelector("#google-signin"),
+  loginMessage: document.querySelector("#login-message"),
+  signedInName: document.querySelector("#signed-in-name"),
+  signedInEmail: document.querySelector("#signed-in-email"),
+  logoutButton: document.querySelector("#logout-button"),
   navButtons: document.querySelectorAll(".nav-button"),
   views: document.querySelectorAll(".view"),
   metricStudents: document.querySelector("#metric-students"),
@@ -52,8 +61,87 @@ async function api(path, options = {}) {
     ...options
   });
   const body = await response.json().catch(() => ({}));
+  if (response.status === 401 && path !== "/api/auth/me") {
+    showLogin("Your session has expired. Sign in again.");
+  }
   if (!response.ok) throw new Error(body.error || "Request failed");
   return body;
+}
+
+function showLogin(message = "") {
+  els.loginScreen.hidden = false;
+  els.appShell.hidden = true;
+  els.loginMessage.textContent = message;
+}
+
+function showApp(user) {
+  state.currentUser = user;
+  els.loginScreen.hidden = true;
+  els.appShell.hidden = false;
+  els.signedInName.textContent = user.name || "Signed in";
+  els.signedInEmail.textContent = user.email || "";
+}
+
+async function loadAuth() {
+  state.authConfig = await api("/api/auth/config");
+  try {
+    const { user } = await api("/api/auth/me");
+    showApp(user);
+    await loadBootstrap();
+    return;
+  } catch {
+    showLogin();
+  }
+
+  if (state.authConfig.authDisabled) {
+    const { user } = await api("/api/auth/me");
+    showApp(user);
+    await loadBootstrap();
+    return;
+  }
+
+  if (!state.authConfig.googleClientId) {
+    showLogin("Google sign-in is not configured yet. Add GOOGLE_CLIENT_ID on the server.");
+    return;
+  }
+
+  renderGoogleButton();
+}
+
+function renderGoogleButton() {
+  const start = () => {
+    if (!window.google?.accounts?.id) {
+      setTimeout(start, 100);
+      return;
+    }
+    window.google.accounts.id.initialize({
+      client_id: state.authConfig.googleClientId,
+      callback: handleGoogleCredential,
+      hosted_domain: state.authConfig.allowedEmailDomain
+    });
+    window.google.accounts.id.renderButton(els.googleSignin, {
+      theme: "outline",
+      size: "large",
+      text: "signin_with",
+      shape: "rectangular",
+      width: 280
+    });
+  };
+  start();
+}
+
+async function handleGoogleCredential(response) {
+  try {
+    els.loginMessage.textContent = "Checking account...";
+    const { user } = await api("/api/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ credential: response.credential })
+    });
+    showApp(user);
+    await loadBootstrap();
+  } catch (error) {
+    showLogin(error.message);
+  }
 }
 
 async function loadBootstrap() {
@@ -284,6 +372,16 @@ async function completeAction(id) {
   if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
 }
 
+async function logout() {
+  await api("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({})
+  }).catch(() => {});
+  state.currentUser = null;
+  showLogin("You have been signed out.");
+  if (window.google?.accounts?.id) window.google.accounts.id.disableAutoSelect();
+}
+
 document.addEventListener("click", event => {
   const nav = event.target.closest("[data-view]");
   if (nav) switchView(nav.dataset.view);
@@ -301,11 +399,12 @@ document.addEventListener("click", event => {
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
 els.studentSearch.addEventListener("input", renderStudents);
+els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();
 });
 
 els.incidentForm.elements.occurred_on.value = today();
-loadBootstrap().catch(error => {
+loadAuth().catch(error => {
   document.body.innerHTML = `<main class="content"><div class="panel"><h2>Unable to start</h2><p>${escapeHtml(error.message)}</p></div></main>`;
 });

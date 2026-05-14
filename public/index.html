@@ -7,7 +7,25 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <div class="app-shell">
+    <section class="login-screen" id="login-screen">
+      <div class="login-content">
+        <div class="login-brand">
+          <div class="brand-mark">TV</div>
+          <div>
+            <h1>Technology Violation Tracker</h1>
+            <p>Staff access for WRPS technology interventions</p>
+          </div>
+        </div>
+        <div class="login-panel">
+          <h2>Sign in to continue</h2>
+          <p>Use your WRPS staff Google account. Student accounts are not allowed.</p>
+          <div id="google-signin"></div>
+          <div id="login-message" role="status"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">TV</div>
@@ -15,6 +33,13 @@
             <h1>Tech Violations</h1>
             <p>Student support tracker</p>
           </div>
+        </div>
+        <div class="user-panel">
+          <div>
+            <strong id="signed-in-name">Signed in</strong>
+            <span id="signed-in-email"></span>
+          </div>
+          <button class="nav-button logout-button" id="logout-button" type="button">Sign out</button>
         </div>
         <nav class="nav" aria-label="Main">
           <button class="nav-button active" data-view="dashboard">Dashboard</button>
@@ -182,6 +207,7 @@
         </section>
       </main>
     </div>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

@@ -34,6 +34,82 @@ npm start
 
 The production start command runs `node server.js`.
 
+## Google Staff Sign-In
+
+The app uses Google Identity Services in the browser and verifies the Google ID token on the server. The server then creates its own HTTP-only session cookie.
+
+Only accounts at `wrps.net` are allowed by default. Accounts at `stu.wrps.net` are explicitly blocked.
+
+### Google Cloud Setup
+
+1. In Google Cloud Console, create or open a project for this app.
+2. Configure the OAuth consent screen for your school Google Workspace.
+3. Create an OAuth Client ID.
+4. Choose `Web application`.
+5. Add authorized JavaScript origins for every URL teachers will use, for example:
+
+   ```text
+   http://localhost:4173
+   http://YOUR-SERVER-NAME:4173
+   https://YOUR-FINAL-INTERNAL-URL
+   ```
+
+6. Copy the OAuth Client ID. This app does not need a Google client secret for the current sign-in flow.
+
+The browser's hosted-domain hint helps guide users to WRPS accounts, but the real block happens on the server after Google verifies the account.
+
+### Required Server Environment Variables
+
+The app loads settings from `.env` automatically. Copy the example file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then edit `.env` and fill in:
+
+```text
+GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+SESSION_SECRET=make-this-a-long-random-string
+```
+
+The current Google sign-in flow uses `GOOGLE_CLIENT_ID`. `GOOGLE_CLIENT_SECRET` is included for reference and possible future server-side OAuth flows.
+
+You can also set these directly in PowerShell before starting the app:
+
+```powershell
+$env:GOOGLE_CLIENT_ID="your-google-oauth-client-id.apps.googleusercontent.com"
+$env:GOOGLE_CLIENT_SECRET="your-google-client-secret"
+$env:SESSION_SECRET="make-this-a-long-random-string"
+$env:ALLOWED_EMAIL_DOMAIN="wrps.net"
+$env:BLOCKED_EMAIL_DOMAINS="stu.wrps.net"
+npm start
+```
+
+For a persistent Windows Server environment variable:
+
+```powershell
+[Environment]::SetEnvironmentVariable("GOOGLE_CLIENT_ID", "your-google-oauth-client-id.apps.googleusercontent.com", "Machine")
+[Environment]::SetEnvironmentVariable("GOOGLE_CLIENT_SECRET", "your-google-client-secret", "Machine")
+[Environment]::SetEnvironmentVariable("SESSION_SECRET", "make-this-a-long-random-string", "Machine")
+[Environment]::SetEnvironmentVariable("ALLOWED_EMAIL_DOMAIN", "wrps.net", "Machine")
+[Environment]::SetEnvironmentVariable("BLOCKED_EMAIL_DOMAINS", "stu.wrps.net", "Machine")
+```
+
+Open a new PowerShell window after setting machine-level variables.
+
+### Local Development Without Google Sign-In
+
+For local testing only, you can temporarily bypass Google sign-in:
+
+```powershell
+$env:AUTH_DISABLED="1"
+npm run dev
+```
+
+Do not set `AUTH_DISABLED=1` on the production server.
+
 ## Build Check
 
 This project does not compile frontend assets yet, but it includes a production readiness check:
@@ -72,6 +148,8 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 6. Start the app:
 
    ```powershell
+   $env:GOOGLE_CLIENT_ID="your-google-oauth-client-id.apps.googleusercontent.com"
+   $env:SESSION_SECRET="make-this-a-long-random-string"
    npm start
    ```
 

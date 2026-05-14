@@ -26,6 +26,10 @@ body {
   color: var(--text);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button,
 input,
 select,
@@ -35,6 +39,89 @@ textarea {
 
 button {
   cursor: pointer;
+}
+
+.login-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(135deg, rgba(16, 24, 32, 0.94), rgba(15, 118, 110, 0.7)),
+    radial-gradient(circle at 20% 20%, rgba(244, 196, 48, 0.22), transparent 28%),
+    radial-gradient(circle at 78% 28%, rgba(219, 234, 254, 0.18), transparent 26%),
+    #101820;
+  background-color: #101820;
+  background-position: center;
+  background-size: cover;
+}
+
+.login-content {
+  width: min(920px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 36px;
+  align-items: center;
+}
+
+.login-brand {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  color: #ffffff;
+}
+
+.login-brand .brand-mark {
+  flex: 0 0 auto;
+}
+
+.login-brand h1,
+.login-brand p,
+.login-panel h2,
+.login-panel p {
+  margin: 0;
+}
+
+.login-brand h1 {
+  max-width: 560px;
+  font-size: clamp(2rem, 5vw, 4.3rem);
+  line-height: 1;
+}
+
+.login-brand p {
+  max-width: 430px;
+  margin-top: 12px;
+  color: #dbe5ef;
+  font-size: 1.05rem;
+}
+
+.login-panel {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.login-panel h2 {
+  font-size: 1.35rem;
+}
+
+.login-panel p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+#google-signin {
+  min-height: 44px;
+  margin-top: 22px;
+}
+
+#login-message {
+  min-height: 22px;
+  margin-top: 14px;
+  color: var(--danger);
+  font-weight: 650;
 }
 
 .app-shell {
@@ -54,6 +141,32 @@ button {
   gap: 14px;
   align-items: center;
   margin-bottom: 36px;
+}
+
+.user-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 20px;
+  border: 1px solid #263442;
+  border-radius: 8px;
+  background: #182431;
+}
+
+.user-panel strong,
+.user-panel span {
+  display: block;
+}
+
+.user-panel span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #b7c1cc;
+  font-size: 0.85rem;
+}
+
+.logout-button {
+  background: #263442;
 }
 
 .brand-mark {
@@ -468,6 +581,10 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  .login-content {
+    grid-template-columns: 1fr;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }

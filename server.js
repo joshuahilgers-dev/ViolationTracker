@@ -1,7 +1,10 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { URL } = require("node:url");
+require("dotenv").config();
+const { OAuth2Client } = require("google-auth-library");
 const initSqlJs = require("sql.js");
 
 const PORT = Number(process.env.PORT || 4173);
@@ -9,6 +12,18 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+const AUTH_DISABLED = process.env.AUTH_DISABLED === "1";
+const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "wrps.net").toLowerCase();
+const BLOCKED_EMAIL_DOMAINS = (process.env.BLOCKED_EMAIL_DOMAINS || "stu.wrps.net")
+  .split(",")
+  .map(domain => domain.trim().toLowerCase())
+  .filter(Boolean);
+const SESSION_HOURS = Number(process.env.SESSION_HOURS || 8);
+const SESSION_COOKIE = "tvt_session";
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -342,6 +357,89 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map(part => {
+    const index = part.indexOf("=");
+    if (index === -1) return ["", ""];
+    return [
+      decodeURIComponent(part.slice(0, index).trim()),
+      decodeURIComponent(part.slice(index + 1).trim())
+    ];
+  }).filter(([key]) => key));
+}
+
+function sign(value) {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("base64url");
+}
+
+function encodeSession(user) {
+  const expiresAt = Date.now() + SESSION_HOURS * 60 * 60 * 1000;
+  const payload = Buffer.from(JSON.stringify({ ...user, expiresAt }), "utf8").toString("base64url");
+  return `${payload}.${sign(payload)}`;
+}
+
+function decodeSession(cookieValue) {
+  if (!cookieValue || !cookieValue.includes(".")) return null;
+  const [payload, signature] = cookieValue.split(".");
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(sign(payload)))) return null;
+  const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  if (!session.expiresAt || session.expiresAt < Date.now()) return null;
+  return {
+    name: session.name,
+    email: session.email,
+    picture: session.picture || null,
+    expiresAt: session.expiresAt
+  };
+}
+
+function sessionCookie(value) {
+  const maxAge = SESSION_HOURS * 60 * 60;
+  return [
+    `${SESSION_COOKIE}=${encodeURIComponent(value)}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${maxAge}`
+  ].join("; ");
+}
+
+function clearSessionCookie() {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+}
+
+function getSession(req) {
+  if (AUTH_DISABLED) {
+    return {
+      name: "Development User",
+      email: `dev@${ALLOWED_EMAIL_DOMAIN}`,
+      picture: null,
+      expiresAt: Date.now() + SESSION_HOURS * 60 * 60 * 1000
+    };
+  }
+  try {
+    return decodeSession(parseCookies(req)[SESSION_COOKIE]);
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedStaffEmail(email, hostedDomain) {
+  const normalizedEmail = String(email || "").toLowerCase();
+  const domain = normalizedEmail.split("@")[1] || "";
+  if (hostedDomain && hostedDomain.toLowerCase() !== ALLOWED_EMAIL_DOMAIN) return false;
+  if (BLOCKED_EMAIL_DOMAINS.includes(domain)) return false;
+  return domain === ALLOWED_EMAIL_DOMAIN;
+}
+
+function requireAuth(req) {
+  const session = getSession(req);
+  if (!session) {
+    throw Object.assign(new Error("Sign in required"), { status: 401 });
+  }
+  return session;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -377,6 +475,57 @@ function nullable(value) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/auth/config") {
+    return sendJson(res, 200, {
+      authDisabled: AUTH_DISABLED,
+      googleClientId: GOOGLE_CLIENT_ID,
+      allowedEmailDomain: ALLOWED_EMAIL_DOMAIN,
+      blockedEmailDomains: BLOCKED_EMAIL_DOMAINS
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/me") {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: "Sign in required" });
+    return sendJson(res, 200, { user: session });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/google") {
+    if (AUTH_DISABLED) {
+      return sendJson(res, 200, { user: getSession(req) });
+    }
+    if (!GOOGLE_CLIENT_ID) {
+      return sendJson(res, 503, { error: "Google sign-in is not configured." });
+    }
+    const body = await readBody(req);
+    const credential = required(body.credential, "Google credential");
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.email_verified) {
+      return sendJson(res, 403, { error: "Google account email is not verified." });
+    }
+    if (!isAllowedStaffEmail(payload.email, payload.hd)) {
+      return sendJson(res, 403, { error: `Use a staff ${ALLOWED_EMAIL_DOMAIN} Google account to access this tracker.` });
+    }
+    const user = {
+      name: payload.name || payload.email,
+      email: payload.email,
+      picture: payload.picture || null
+    };
+    res.setHeader("Set-Cookie", sessionCookie(encodeSession(user)));
+    return sendJson(res, 200, { user });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    res.setHeader("Set-Cookie", clearSessionCookie());
+    return sendJson(res, 200, { ok: true });
+  }
+
+  requireAuth(req);
+
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const search = "";
     const students = statements.listStudents.all(search, "%%").map(toStudentView);
