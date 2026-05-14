@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Technology Violation Tracker</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">TV</div>
+          <div>
+            <h1>Tech Violations</h1>
+            <p>Student support tracker</p>
+          </div>
+        </div>
+        <nav class="nav" aria-label="Main">
+          <button class="nav-button active" data-view="dashboard">Dashboard</button>
+          <button class="nav-button" data-view="new-incident">New Violation</button>
+          <button class="nav-button" data-view="students">Students</button>
+          <button class="nav-button" data-view="actions">Action Queue</button>
+          <button class="nav-button" data-view="settings">Settings</button>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="view active" id="dashboard-view">
+          <div class="page-heading">
+            <div>
+              <h2>Dashboard</h2>
+              <p id="dashboard-subtitle">Current students, interventions, and open follow-ups.</p>
+            </div>
+            <button class="primary-button" data-open-view="new-incident">Add violation</button>
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <span>Total active students</span>
+              <strong id="metric-students">0</strong>
+            </div>
+            <div class="metric">
+              <span>Open follow-ups</span>
+              <strong id="metric-actions">0</strong>
+            </div>
+            <div class="metric">
+              <span>Contracts active</span>
+              <strong id="metric-contracts">0</strong>
+            </div>
+            <div class="metric urgent">
+              <span>Admin review</span>
+              <strong id="metric-admin">0</strong>
+            </div>
+          </div>
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Open Follow-Ups</h3>
+              </div>
+              <div id="dashboard-actions" class="stack-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Students By Current Step</h3>
+              </div>
+              <div id="status-groups" class="status-groups"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="new-incident-view">
+          <div class="page-heading">
+            <div>
+              <h2>New Violation</h2>
+              <p>Enter the teacher report and the app will queue the next required step.</p>
+            </div>
+          </div>
+          <form id="incident-form" class="form-grid panel">
+            <label>
+              Student
+              <select name="student_id" required></select>
+            </label>
+            <label>
+              Date
+              <input type="date" name="occurred_on" required>
+            </label>
+            <label>
+              Teacher or staff member
+              <input name="reported_by" autocomplete="name" required>
+            </label>
+            <label>
+              Class period
+              <input name="class_period">
+            </label>
+            <fieldset class="segmented-field">
+              <legend>Severity</legend>
+              <label><input type="radio" name="severity" value="minor" checked> Minor</label>
+              <label><input type="radio" name="severity" value="major"> Major</label>
+            </fieldset>
+            <label>
+              Infraction type
+              <select name="infraction_type_id" required></select>
+            </label>
+            <label class="full-width">
+              Notes
+              <textarea name="notes" rows="5"></textarea>
+            </label>
+            <div class="form-actions full-width">
+              <button type="submit" class="primary-button">Save violation</button>
+              <span id="incident-message" role="status"></span>
+            </div>
+          </form>
+        </section>
+
+        <section class="view" id="students-view">
+          <div class="page-heading">
+            <div>
+              <h2>Students</h2>
+              <p>Search, add, and review complete technology history.</p>
+            </div>
+          </div>
+          <div class="split-layout students-layout">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Add Student</h3>
+              </div>
+              <form id="student-form" class="student-form">
+                <label>First name <input name="first_name" required></label>
+                <label>Last name <input name="last_name" required></label>
+                <label>Student ID <input name="student_number"></label>
+                <label>Grade <input name="grade"></label>
+                <label>Team <input name="team"></label>
+                <label>Parent/guardian <input name="guardian_name"></label>
+                <label>Contact <input name="guardian_contact"></label>
+                <label>Device tag <input name="device_asset_tag"></label>
+                <button type="submit" class="primary-button">Add student</button>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-heading compact-heading">
+                <h3>Student List</h3>
+                <input id="student-search" type="search" placeholder="Search">
+              </div>
+              <div id="student-list" class="student-list"></div>
+            </section>
+          </div>
+          <section class="panel detail-panel" id="student-detail" hidden></section>
+        </section>
+
+        <section class="view" id="actions-view">
+          <div class="page-heading">
+            <div>
+              <h2>Action Queue</h2>
+              <p>Open reflection, contract, parent contact, restriction, and admin tasks.</p>
+            </div>
+          </div>
+          <div id="action-list" class="action-list"></div>
+        </section>
+
+        <section class="view" id="settings-view">
+          <div class="page-heading">
+            <div>
+              <h2>Settings</h2>
+              <p>Current intervention rules and seeded violation categories.</p>
+            </div>
+          </div>
+          <div class="split-layout">
+            <section class="panel">
+              <h3>Intervention Rules</h3>
+              <ol class="rules">
+                <li>Two minor violations: Digital Impact Reflection and parent notification.</li>
+                <li>Three minor violations or one major violation: Technology Success Contract.</li>
+                <li>Fourth total violation: five school-day Chromebook restriction.</li>
+                <li>Fifth or later violation: Chromebook to admin for next steps.</li>
+              </ol>
+            </section>
+            <section class="panel">
+              <h3>Violation Types</h3>
+              <div id="infraction-settings" class="infraction-settings"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

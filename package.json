@@ -1,0 +1,13 @@
+{
+  "name": "technology-violation-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local school technology violation tracking app",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
