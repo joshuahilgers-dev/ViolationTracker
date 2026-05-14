@@ -596,6 +596,25 @@ textarea {
   justify-content: flex-end;
 }
 
+.action-fields {
+  max-width: 320px;
+  margin-top: 12px;
+}
+
+.history-details {
+  margin-top: 18px;
+}
+
+.history-details summary {
+  cursor: pointer;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.history-details .timeline {
+  margin-top: 12px;
+}
+
 .action-row.complete {
   opacity: 0.64;
 }

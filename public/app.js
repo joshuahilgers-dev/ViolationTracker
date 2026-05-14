@@ -1,6 +1,7 @@
 const state = {
   authConfig: null,
   currentUser: null,
+  currentTerm: null,
   students: [],
   infractionTypes: [],
   templates: [],
@@ -56,7 +57,10 @@ const els = {
   templateForm: document.querySelector("#template-form"),
   templateMessage: document.querySelector("#template-message"),
   templateList: document.querySelector("#template-list"),
-  infractionSettings: document.querySelector("#infraction-settings")
+  infractionSettings: document.querySelector("#infraction-settings"),
+  currentTermLabel: document.querySelector("#current-term-label"),
+  termMessage: document.querySelector("#term-message"),
+  startTermButton: document.querySelector("#start-term-button")
 };
 
 function today() {
@@ -164,6 +168,7 @@ async function handleGoogleCredential(response) {
 
 async function loadBootstrap() {
   const data = await api("/api/bootstrap");
+  state.currentTerm = data.currentTerm;
   state.students = data.students;
   state.infractionTypes = data.infractionTypes;
   state.templates = data.templates || [];
@@ -189,6 +194,15 @@ function renderAll() {
   renderActions();
   renderTemplates();
   renderInfractionSettings();
+  renderTermSettings();
+}
+
+function renderTermSettings() {
+  if (!els.currentTermLabel) return;
+  const term = state.currentTerm;
+  els.currentTermLabel.textContent = term
+    ? `Current term: ${term.name} (started ${term.started_on})`
+    : "Current term is not set.";
 }
 
 function switchView(name) {
@@ -315,7 +329,7 @@ function followupStudentCard(group) {
 function actionCard(action) {
   const template = templateForAction(action.action_type);
   return `
-    <article class="action-row">
+    <article class="action-row" data-action-id="${action.id}">
       <div>
         <h4>${escapeHtml(action.title)}</h4>
         <div class="meta">
@@ -323,6 +337,7 @@ function actionCard(action) {
           <span>Due: ${escapeHtml(action.due_on || "No date")}</span>
         </div>
         ${action.notes ? `<div class="meta">${escapeHtml(action.notes)}</div>` : ""}
+        ${actionFields(action)}
       </div>
       <div class="row-actions">
         ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
@@ -330,6 +345,30 @@ function actionCard(action) {
       </div>
     </article>
   `;
+}
+
+function actionFields(action) {
+  if (action.action_type === "device_restriction") {
+    return `
+      <div class="action-fields">
+        <label>
+          Asset tag
+          <input data-action-asset-tag="${action.id}" autocomplete="off" placeholder="Scan or enter asset tag" required>
+        </label>
+      </div>
+    `;
+  }
+  if (action.action_type === "reentry_check") {
+    return `
+      <div class="action-fields">
+        <label>
+          Chromebook return date
+          <input type="date" data-action-return-date="${action.id}" value="${escapeHtml(action.due_on || "")}" required>
+        </label>
+      </div>
+    `;
+  }
+  return "";
 }
 
 function templateForAction(actionType) {
@@ -400,6 +439,21 @@ function renderStatusStudents(key) {
   switchView("status");
 }
 
+function incidentRows(incidents) {
+  return incidents.length ? incidents.map(incident => `
+    <article class="incident-row">
+      <h4>${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}</h4>
+      <div class="meta">
+        <span>Reported by ${escapeHtml(incident.reported_by)}</span>
+        ${incident.class_period ? `<span>Period ${escapeHtml(incident.class_period)}</span>` : ""}
+        ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
+        ${incident.term_name ? `<span>${escapeHtml(incident.term_name)}</span>` : ""}
+      </div>
+      ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
+    </article>
+  `).join("") : `<div class="empty">No violations recorded.</div>`;
+}
+
 async function showFollowups(studentId) {
   const student = await api(`/api/students/${studentId}`);
   state.selectedFollowupStudentId = studentId;
@@ -431,6 +485,8 @@ async function showStudentDetail(id) {
   const student = await api(`/api/students/${id}`);
   state.selectedStudentId = id;
   const openActions = student.actions.filter(action => action.status === "open");
+  const currentIncidents = student.currentIncidents || student.incidents || [];
+  const previousIncidents = student.previousIncidents || [];
   els.studentDetail.hidden = false;
   els.studentDetail.innerHTML = `
     <div class="detail-header">
@@ -459,20 +515,16 @@ async function showStudentDetail(id) {
     <div class="timeline">
       ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
     </div>
-    <h4 class="section-title">Violation History</h4>
+    <h4 class="section-title">Violation History: Current Term</h4>
     <div class="timeline">
-      ${student.incidents.length ? student.incidents.map(incident => `
-        <article class="incident-row">
-          <h4>${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}</h4>
-          <div class="meta">
-            <span>Reported by ${escapeHtml(incident.reported_by)}</span>
-            ${incident.class_period ? `<span>Period ${escapeHtml(incident.class_period)}</span>` : ""}
-            ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
-          </div>
-          ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
-        </article>
-      `).join("") : `<div class="empty">No violations recorded.</div>`}
+      ${incidentRows(currentIncidents)}
     </div>
+    <details class="history-details">
+      <summary>Violation History: Previous Terms (${previousIncidents.length})</summary>
+      <div class="timeline">
+        ${incidentRows(previousIncidents)}
+      </div>
+    </details>
   `;
   els.studentDetail.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -642,9 +694,26 @@ async function createIncident(event) {
 }
 
 async function completeAction(id) {
+  const actionRow = document.querySelector(`[data-action-id="${id}"]`);
+  const assetTagField = actionRow?.querySelector(`[data-action-asset-tag="${id}"]`);
+  const returnDateField = actionRow?.querySelector(`[data-action-return-date="${id}"]`);
+  const payload = { status: "complete" };
+  if (assetTagField) payload.asset_tag = assetTagField.value.trim();
+  if (returnDateField) payload.return_date = returnDateField.value;
+  if (assetTagField && !payload.asset_tag) {
+    assetTagField.focus();
+    window.alert("Enter or scan the asset tag before completing this follow-up.");
+    return;
+  }
+  if (returnDateField && !payload.return_date) {
+    returnDateField.focus();
+    window.alert("Choose the Chromebook return date before completing this follow-up.");
+    return;
+  }
+
   await api(`/api/actions/${id}`, {
     method: "PATCH",
-    body: JSON.stringify({ status: "complete" })
+    body: JSON.stringify(payload)
   });
   await loadBootstrap();
   if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
@@ -746,6 +815,33 @@ async function clearAllStudents() {
   await loadBootstrap();
 }
 
+async function startNewTerm() {
+  const phrase = window.prompt("This will move current-term violations into Previous Terms and reset active counts/follow-ups. Type START NEW TERM to continue.");
+  if (phrase !== "START NEW TERM") return;
+  const name = window.prompt("Name this new term. Leave blank to use today's date.") || "";
+  els.termMessage.textContent = "Starting new term...";
+  els.startTermButton.disabled = true;
+  try {
+    const result = await api("/api/terms/start", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: phrase, name })
+    });
+    state.currentTerm = result.currentTerm;
+    state.selectedStudentId = null;
+    state.selectedFollowupStudentId = null;
+    els.studentDetail.hidden = true;
+    els.studentDetail.innerHTML = "";
+    els.followupsDetail.innerHTML = "";
+    await loadBootstrap();
+    els.termMessage.textContent = "New term started.";
+    setTimeout(() => { els.termMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.termMessage.textContent = error.message;
+  } finally {
+    els.startTermButton.disabled = false;
+  }
+}
+
 async function logout() {
   await api("/api/auth/logout", {
     method: "POST",
@@ -797,6 +893,7 @@ els.studentForm.addEventListener("submit", createStudent);
 els.csvImportForm.addEventListener("submit", importCsv);
 els.studentSearch.addEventListener("input", renderStudents);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
+els.startTermButton.addEventListener("click", startNewTerm);
 els.templateForm.addEventListener("submit", uploadTemplate);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {

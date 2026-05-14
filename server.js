@@ -24,6 +24,7 @@ const BLOCKED_EMAIL_DOMAINS = (process.env.BLOCKED_EMAIL_DOMAINS || "stu.wrps.ne
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 8);
 const SESSION_COOKIE = "tvt_session";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const CURRENT_TERM_SETTING = "current_term_id";
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -39,6 +40,18 @@ function persistDb() {
 function execSql(sql, shouldPersist = false) {
   db.exec(sql);
   if (shouldPersist) persistDb();
+}
+
+function tableColumns(tableName) {
+  const rows = db.exec(`PRAGMA table_info(${tableName})`);
+  if (!rows.length) return [];
+  return rows[0].values.map(row => row[1]);
+}
+
+function ensureColumn(tableName, columnName, definition) {
+  if (!tableColumns(tableName).includes(columnName)) {
+    execSql(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition};`, true);
+  }
 }
 
 function prepare(sql) {
@@ -223,6 +236,7 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS incidents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      term_id INTEGER,
       occurred_on TEXT NOT NULL,
       reported_by TEXT NOT NULL,
       class_period TEXT,
@@ -263,9 +277,43 @@ function migrate() {
       mime_type TEXT NOT NULL,
       uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS terms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      started_on TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `, true);
 
+  ensureColumn("incidents", "term_id", "INTEGER");
+  ensureCurrentTerm();
   syncInfractionTypes();
+}
+
+function ensureCurrentTerm() {
+  const existingSetting = prepare("SELECT value FROM app_settings WHERE key = ?").get(CURRENT_TERM_SETTING);
+  const settingTermId = Number(existingSetting?.value || 0);
+  const settingTerm = settingTermId ? prepare("SELECT * FROM terms WHERE id = ?").get(settingTermId) : null;
+  if (settingTerm) {
+    prepare("UPDATE incidents SET term_id = ? WHERE term_id IS NULL").run(settingTerm.id);
+    return settingTerm.id;
+  }
+
+  let term = prepare("SELECT * FROM terms ORDER BY id DESC LIMIT 1").get();
+  if (!term) {
+    const todayText = new Date().toISOString().slice(0, 10);
+    const result = prepare("INSERT INTO terms (name, started_on) VALUES (?, ?)").run("Current Term", todayText);
+    term = { id: Number(result.lastInsertRowid), name: "Current Term", started_on: todayText };
+  }
+  prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)").run(CURRENT_TERM_SETTING, String(term.id));
+  prepare("UPDATE incidents SET term_id = ? WHERE term_id IS NULL").run(term.id);
+  return term.id;
 }
 
 function prepareStatements() {
@@ -277,7 +325,7 @@ function prepareStatements() {
       SUM(CASE WHEN i.severity = 'major' THEN 1 ELSE 0 END) AS major_count,
       MAX(i.occurred_on) AS last_incident_on
     FROM students s
-    LEFT JOIN incidents i ON i.student_id = s.id
+    LEFT JOIN incidents i ON i.student_id = s.id AND i.term_id = ?
     WHERE s.active = 1
       AND (? = '' OR LOWER(s.first_name || ' ' || s.last_name || ' ' || COALESCE(s.student_number, '')) LIKE ?)
     GROUP BY s.id
@@ -322,40 +370,80 @@ function prepareStatements() {
     ORDER BY severity, category, CASE WHEN label = 'Other' THEN 1 ELSE 0 END, label
   `),
   createIncident: prepare(`
-    INSERT INTO incidents (student_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO incidents (student_id, term_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
   incidentsForStudent: prepare(`
-    SELECT i.*, t.category, t.label AS infraction_label
+    SELECT i.*, t.category, t.label AS infraction_label, terms.name AS term_name, terms.started_on AS term_started_on
     FROM incidents i
     LEFT JOIN infraction_types t ON t.id = i.infraction_type_id
+    LEFT JOIN terms ON terms.id = i.term_id
     WHERE i.student_id = ?
     ORDER BY i.occurred_on DESC, i.id DESC
   `),
   incidentsForStatus: prepare(`
     SELECT id, severity, occurred_on
     FROM incidents
-    WHERE student_id = ?
+    WHERE student_id = ? AND term_id = ?
     ORDER BY occurred_on, id
   `),
   actionsForStudent: prepare(`
-    SELECT * FROM actions WHERE student_id = ? ORDER BY status, due_on IS NULL, due_on, created_at DESC
+    SELECT *
+    FROM actions
+    WHERE student_id = ?
+    ORDER BY status,
+      due_on IS NULL,
+      due_on,
+      CASE action_type
+        WHEN 'digital_reflection' THEN 1
+        WHEN 'parent_contact_reflection' THEN 2
+        WHEN 'success_contract' THEN 3
+        WHEN 'parent_contact_contract' THEN 4
+        WHEN 'device_restriction' THEN 5
+        WHEN 'reentry_check' THEN 6
+        WHEN 'return_chromebook' THEN 7
+        WHEN 'admin_review' THEN 8
+        WHEN 'parent_contact_admin' THEN 9
+        ELSE 99
+      END,
+      id
   `),
   openActions: prepare(`
     SELECT a.*, s.first_name, s.last_name, s.grade
     FROM actions a
     JOIN students s ON s.id = a.student_id
     WHERE a.status = 'open' AND s.active = 1
-    ORDER BY a.due_on IS NULL, a.due_on, a.created_at DESC
+    ORDER BY a.due_on IS NULL,
+      a.due_on,
+      CASE a.action_type
+        WHEN 'digital_reflection' THEN 1
+        WHEN 'parent_contact_reflection' THEN 2
+        WHEN 'success_contract' THEN 3
+        WHEN 'parent_contact_contract' THEN 4
+        WHEN 'device_restriction' THEN 5
+        WHEN 'reentry_check' THEN 6
+        WHEN 'return_chromebook' THEN 7
+        WHEN 'admin_review' THEN 8
+        WHEN 'parent_contact_admin' THEN 9
+        ELSE 99
+      END,
+      a.id
   `),
+  getAction: prepare("SELECT * FROM actions WHERE id = ?"),
   completeAction: prepare(`
     UPDATE actions
     SET status = ?, completed_on = ?, notes = COALESCE(?, notes)
     WHERE id = ?
   `),
+  updateActionDueDate: prepare(`
+    UPDATE actions SET due_on = ? WHERE id = ?
+  `),
   insertAction: prepare(`
     INSERT OR IGNORE INTO actions (student_id, incident_id, action_type, title, due_on, owner, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateStudentAssetTag: prepare(`
+    UPDATE students SET device_asset_tag = ? WHERE id = ?
   `),
   addAudit: prepare(`
     INSERT INTO audit_log (entity_type, entity_id, message) VALUES (?, ?, ?)
@@ -367,7 +455,26 @@ function prepareStatements() {
       SUM(CASE WHEN severity = 'major' THEN 1 ELSE 0 END) AS major_count,
       MAX(occurred_on) AS last_incident_on
     FROM incidents
-    WHERE student_id = ?
+    WHERE student_id = ? AND term_id = ?
+  `),
+  getCurrentTerm: prepare(`
+    SELECT terms.*
+    FROM app_settings
+    JOIN terms ON terms.id = CAST(app_settings.value AS INTEGER)
+    WHERE app_settings.key = ?
+  `),
+  insertTerm: prepare(`
+    INSERT INTO terms (name, started_on) VALUES (?, ?)
+  `),
+  setSetting: prepare(`
+    INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)
+  `),
+  archiveOpenActions: prepare(`
+    UPDATE actions
+    SET status = 'complete',
+        completed_on = ?,
+        notes = COALESCE(notes, 'Archived when a new term was started.')
+    WHERE status = 'open'
   `),
   listTemplates: prepare(`
     SELECT * FROM action_templates ORDER BY label
@@ -459,7 +566,7 @@ function statusFromIncidentHistory(incidents) {
 }
 
 function statusForStudent(studentId) {
-  return statusFromIncidentHistory(statements.incidentsForStatus.all(studentId));
+  return statusFromIncidentHistory(statements.incidentsForStatus.all(studentId, currentTerm().id));
 }
 
 function toStudentView(row) {
@@ -475,6 +582,17 @@ function toStudentView(row) {
     minor_count: Number(row.minor_count || 0),
     major_count: Number(row.major_count || 0),
     status: statusForStudent(row.id)
+  };
+}
+
+function currentTerm() {
+  return statements.getCurrentTerm.get(CURRENT_TERM_SETTING) || { id: ensureCurrentTerm(), name: "Current Term", started_on: new Date().toISOString().slice(0, 10) };
+}
+
+function splitIncidentsByTerm(incidents, currentTermId) {
+  return {
+    currentIncidents: incidents.filter(incident => Number(incident.term_id) === Number(currentTermId)),
+    previousIncidents: incidents.filter(incident => Number(incident.term_id) !== Number(currentTermId))
   };
 }
 
@@ -658,6 +776,15 @@ function nullable(value) {
   return String(value).trim();
 }
 
+function optionalDate(value, label) {
+  const date = nullable(value);
+  if (!date) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw Object.assign(new Error(`${label} must be a valid date.`), { status: 400 });
+  }
+  return date;
+}
+
 function templateUrl(template) {
   if (!template) return null;
   return `/templates/${encodeURIComponent(template.action_type)}/file`;
@@ -771,9 +898,11 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const search = "";
-    const students = statements.listStudents.all(search, "%%").map(toStudentView);
+    const term = currentTerm();
+    const students = statements.listStudents.all(term.id, search, "%%").map(toStudentView);
     const templates = statements.listTemplates.all().map(templateView);
     return sendJson(res, 200, {
+      currentTerm: term,
       students,
       infractionTypes: statements.listInfractions.all(),
       templates,
@@ -787,7 +916,7 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/students") {
     const search = (url.searchParams.get("q") || "").trim().toLowerCase();
     const like = `%${search}%`;
-    return sendJson(res, 200, statements.listStudents.all(search, like).map(toStudentView));
+    return sendJson(res, 200, statements.listStudents.all(currentTerm().id, search, like).map(toStudentView));
   }
 
   if (req.method === "POST" && url.pathname === "/api/students") {
@@ -833,12 +962,17 @@ async function handleApi(req, res, url) {
     const id = Number(studentMatch[1]);
     const student = statements.getStudent.get(id);
     if (!student) return sendJson(res, 404, { error: "Student not found" });
-    const counts = statements.incidentCounts.get(id);
+    const term = currentTerm();
+    const counts = statements.incidentCounts.get(id, term.id);
+    const incidents = statements.incidentsForStudent.all(id);
+    const { currentIncidents, previousIncidents } = splitIncidentsByTerm(incidents, term.id);
     return sendJson(res, 200, {
       ...student,
       counts,
       status: statusForStudent(id),
-      incidents: statements.incidentsForStudent.all(id),
+      incidents,
+      currentIncidents,
+      previousIncidents,
       actions: statements.actionsForStudent.all(id)
     });
   }
@@ -861,9 +995,11 @@ async function handleApi(req, res, url) {
     if (!["minor", "major"].includes(severity)) {
       throw Object.assign(new Error("Severity must be minor or major"), { status: 400 });
     }
+    const term = currentTerm();
     const previousStatus = statusForStudent(studentId);
     const result = statements.createIncident.run(
       studentId,
+      term.id,
       occurredOn,
       reportedBy,
       nullable(body.class_period),
@@ -877,12 +1013,56 @@ async function handleApi(req, res, url) {
     return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/terms/start") {
+    const body = await readBody(req);
+    if (body.confirmation !== "START NEW TERM") {
+      return sendJson(res, 400, { error: "Confirmation phrase is required." });
+    }
+    const todayText = new Date().toISOString().slice(0, 10);
+    const name = nullable(body.name) || `Term starting ${todayText}`;
+    const result = statements.insertTerm.run(name, todayText);
+    const termId = Number(result.lastInsertRowid);
+    statements.setSetting.run(CURRENT_TERM_SETTING, String(termId));
+    statements.archiveOpenActions.run(todayText);
+    statements.addAudit.run("term", termId, `${name} was started.`);
+    return sendJson(res, 200, { currentTerm: currentTerm() });
+  }
+
   const actionMatch = url.pathname.match(/^\/api\/actions\/(\d+)$/);
   if (req.method === "PATCH" && actionMatch) {
     const body = await readBody(req);
+    const actionId = Number(actionMatch[1]);
+    const action = statements.getAction.get(actionId);
+    if (!action) return sendJson(res, 404, { error: "Follow-up not found" });
     const status = body.status === "complete" ? "complete" : "open";
     const completedOn = status === "complete" ? new Date().toISOString().slice(0, 10) : null;
-    statements.completeAction.run(status, completedOn, nullable(body.notes), Number(actionMatch[1]));
+    let notes = nullable(body.notes);
+
+    if (status === "complete" && action.action_type === "device_restriction") {
+      const assetTag = required(body.asset_tag, "Asset tag");
+      statements.updateStudentAssetTag.run(assetTag, action.student_id);
+      notes = notes || `Asset tag: ${assetTag}`;
+    }
+
+    if (status === "complete" && action.action_type === "reentry_check") {
+      const returnDate = optionalDate(body.return_date, "Return date");
+      if (!returnDate) {
+        return sendJson(res, 400, { error: "Return date is required." });
+      }
+      statements.updateActionDueDate.run(returnDate, actionId);
+      notes = notes || `Chromebook return date: ${returnDate}`;
+      queueAction(
+        action.student_id,
+        action.incident_id,
+        "return_chromebook",
+        "Return Chromebook to student",
+        returnDate,
+        "Library/Tech",
+        "Return the Chromebook to the student after the restriction period."
+      );
+    }
+
+    statements.completeAction.run(status, completedOn, notes, actionId);
     return sendJson(res, 200, { ok: true });
   }
 
