@@ -4,10 +4,14 @@
   "private": true,
   "description": "Local school technology violation tracking app",
   "scripts": {
+    "build": "node scripts/build-check.js",
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
+  "dependencies": {
+    "sql.js": "1.10.3"
+  },
   "engines": {
-    "node": ">=24"
+    "node": ">=20"
   }
 }

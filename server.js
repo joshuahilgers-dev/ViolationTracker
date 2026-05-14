@@ -2,7 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
-const { DatabaseSync } = require("node:sqlite");
+const initSqlJs = require("sql.js");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
@@ -12,12 +12,57 @@ const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.s
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(DB_PATH);
-db.exec("PRAGMA foreign_keys = ON;");
-db.exec("PRAGMA journal_mode = WAL;");
+let db;
+let statements;
+
+function persistDb() {
+  fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
+}
+
+function execSql(sql, shouldPersist = false) {
+  db.exec(sql);
+  if (shouldPersist) persistDb();
+}
+
+function prepare(sql) {
+  return {
+    get(...params) {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.bind(params);
+        if (!stmt.step()) return undefined;
+        return stmt.getAsObject();
+      } finally {
+        stmt.free();
+      }
+    },
+    all(...params) {
+      const stmt = db.prepare(sql);
+      const rows = [];
+      try {
+        stmt.bind(params);
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        return rows;
+      } finally {
+        stmt.free();
+      }
+    },
+    run(...params) {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.run(params);
+        const row = db.exec("SELECT last_insert_rowid() AS id")[0]?.values?.[0];
+        persistDb();
+        return { lastInsertRowid: row ? row[0] : 0 };
+      } finally {
+        stmt.free();
+      }
+    }
+  };
+}
 
 function migrate() {
-  db.exec(`
+  execSql(`
     CREATE TABLE IF NOT EXISTS students (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_number TEXT,
@@ -75,11 +120,11 @@ function migrate() {
       message TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `);
+  `, true);
 
-  const count = db.prepare("SELECT COUNT(*) AS count FROM infraction_types").get().count;
+  const count = prepare("SELECT COUNT(*) AS count FROM infraction_types").get().count;
   if (count === 0) {
-    const insert = db.prepare(`
+    const insert = prepare(`
       INSERT INTO infraction_types (severity, category, label, description)
       VALUES (?, ?, ?, ?)
     `);
@@ -116,10 +161,9 @@ function migrate() {
   }
 }
 
-migrate();
-
-const statements = {
-  listStudents: db.prepare(`
+function prepareStatements() {
+  return {
+  listStudents: prepare(`
     SELECT s.*,
       COUNT(i.id) AS violation_count,
       SUM(CASE WHEN i.severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
@@ -132,48 +176,48 @@ const statements = {
     GROUP BY s.id
     ORDER BY s.last_name, s.first_name
   `),
-  getStudent: db.prepare("SELECT * FROM students WHERE id = ?"),
-  createStudent: db.prepare(`
+  getStudent: prepare("SELECT * FROM students WHERE id = ?"),
+  createStudent: prepare(`
     INSERT INTO students (student_number, first_name, last_name, grade, team, guardian_name, guardian_contact, device_asset_tag)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
-  listInfractions: db.prepare(`
+  listInfractions: prepare(`
     SELECT * FROM infraction_types WHERE active = 1 ORDER BY severity, category, label
   `),
-  createIncident: db.prepare(`
+  createIncident: prepare(`
     INSERT INTO incidents (student_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
-  incidentsForStudent: db.prepare(`
+  incidentsForStudent: prepare(`
     SELECT i.*, t.category, t.label AS infraction_label
     FROM incidents i
     LEFT JOIN infraction_types t ON t.id = i.infraction_type_id
     WHERE i.student_id = ?
     ORDER BY i.occurred_on DESC, i.id DESC
   `),
-  actionsForStudent: db.prepare(`
+  actionsForStudent: prepare(`
     SELECT * FROM actions WHERE student_id = ? ORDER BY status, due_on IS NULL, due_on, created_at DESC
   `),
-  openActions: db.prepare(`
+  openActions: prepare(`
     SELECT a.*, s.first_name, s.last_name, s.grade
     FROM actions a
     JOIN students s ON s.id = a.student_id
     WHERE a.status = 'open' AND s.active = 1
     ORDER BY a.due_on IS NULL, a.due_on, a.created_at DESC
   `),
-  completeAction: db.prepare(`
+  completeAction: prepare(`
     UPDATE actions
     SET status = ?, completed_on = ?, notes = COALESCE(?, notes)
     WHERE id = ?
   `),
-  insertAction: db.prepare(`
+  insertAction: prepare(`
     INSERT OR IGNORE INTO actions (student_id, incident_id, action_type, title, due_on, owner, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
-  addAudit: db.prepare(`
+  addAudit: prepare(`
     INSERT INTO audit_log (entity_type, entity_id, message) VALUES (?, ?, ?)
   `),
-  incidentCounts: db.prepare(`
+  incidentCounts: prepare(`
     SELECT
       COUNT(*) AS total_count,
       SUM(CASE WHEN severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
@@ -183,6 +227,7 @@ const statements = {
     WHERE student_id = ?
   `)
 };
+}
 
 function statusFromCounts(counts) {
   const total = Number(counts.total_count || 0);
@@ -463,7 +508,23 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Technology tracker running at http://localhost:${PORT}`);
-  console.log(`Database: ${DB_PATH}`);
+async function main() {
+  const SQL = await initSqlJs({
+    locateFile: file => path.join(ROOT, "node_modules", "sql.js", "dist", file)
+  });
+  const fileBuffer = fs.existsSync(DB_PATH) ? fs.readFileSync(DB_PATH) : null;
+  db = fileBuffer ? new SQL.Database(fileBuffer) : new SQL.Database();
+  execSql("PRAGMA foreign_keys = ON;");
+  migrate();
+  statements = prepareStatements();
+
+  server.listen(PORT, () => {
+    console.log(`Technology tracker running at http://localhost:${PORT}`);
+    console.log(`Database: ${DB_PATH}`);
+  });
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
 });

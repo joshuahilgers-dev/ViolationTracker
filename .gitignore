@@ -3,3 +3,5 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 *.log
 .push-worktree/
+node_modules/
+.npm-cache/
