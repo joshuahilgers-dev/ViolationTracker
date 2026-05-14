@@ -12,6 +12,7 @@ const state = {
 
 const statusOrder = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor"];
 const statusLabels = {
+  no_violations: "No violations",
   monitor: "Monitor",
   reflection: "Digital Impact Reflection",
   success_contract: "Technology Success Contract",
@@ -475,6 +476,7 @@ async function createStudent(event) {
     body: JSON.stringify(payload)
   });
   event.currentTarget.reset();
+  els.studentSearch.value = "";
   await loadBootstrap();
   els.studentMessage.textContent = `${studentName} was added.`;
   setTimeout(() => { els.studentMessage.textContent = ""; }, 5000);
@@ -577,6 +579,7 @@ async function importCsv(event) {
     body: JSON.stringify({ students })
   });
   els.csvImportForm.reset();
+  els.studentSearch.value = "";
   await loadBootstrap();
   els.csvMessage.textContent = `${result.created} added, ${result.updated} updated, ${result.skipped} skipped.`;
   if (result.errors?.length) {

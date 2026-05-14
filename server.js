@@ -303,6 +303,14 @@ function statusFromCounts(counts) {
   const minor = Number(counts.minor_count || 0);
   const major = Number(counts.major_count || 0);
 
+  if (total === 0) {
+    return {
+      key: "no_violations",
+      label: "No violations",
+      level: 0,
+      description: "No technology violations are currently recorded."
+    };
+  }
   if (total >= 5) {
     return {
       key: "admin_review",
@@ -339,7 +347,7 @@ function statusFromCounts(counts) {
     key: "monitor",
     label: "Monitor",
     level: 1,
-    description: "No formal technology intervention is currently due."
+    description: "One minor violation is recorded. Continue monitoring."
   };
 }
 
