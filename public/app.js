@@ -479,8 +479,9 @@ async function showStudentDetail(id) {
 
 async function createStudent(event) {
   event.preventDefault();
-  const submitButton = event.currentTarget.querySelector("button[type='submit']");
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const submitButton = formElement.querySelector("button[type='submit']");
+  const form = new FormData(formElement);
   const payload = Object.fromEntries(form.entries());
   const studentName = `${payload.first_name || ""} ${payload.last_name || ""}`.trim();
   const originalText = submitButton.textContent;
@@ -492,7 +493,7 @@ async function createStudent(event) {
       method: "POST",
       body: JSON.stringify(payload)
     });
-    event.currentTarget.reset();
+    formElement.reset();
     els.studentSearch.value = "";
     await loadBootstrap();
     els.studentMessage.textContent = `${studentName} was ${result.mode === "updated" ? "updated" : "added"}.`;
@@ -612,8 +613,9 @@ async function importCsv(event) {
 
 async function createIncident(event) {
   event.preventDefault();
-  const submitButton = event.currentTarget.querySelector("button[type='submit']");
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const submitButton = formElement.querySelector("button[type='submit']");
+  const form = new FormData(formElement);
   const payload = Object.fromEntries(form.entries());
   const originalText = submitButton.textContent;
   submitButton.disabled = true;
@@ -624,7 +626,7 @@ async function createIncident(event) {
       method: "POST",
       body: JSON.stringify(payload)
     });
-    event.currentTarget.reset();
+    formElement.reset();
     els.incidentForm.elements.occurred_on.value = today();
     populateReporterEmail();
     renderInfractionOptions();
@@ -666,7 +668,8 @@ function readFileAsBase64(file) {
 
 async function uploadTemplate(event) {
   event.preventDefault();
-  const submitButton = event.currentTarget.querySelector("button[type='submit']");
+  const formElement = event.currentTarget;
+  const submitButton = formElement.querySelector("button[type='submit']");
   const file = els.templateForm.elements.template_file.files[0];
   if (!file) return;
   const actionType = els.templateForm.elements.action_type.value;
