@@ -338,6 +338,12 @@ button {
   margin-bottom: 14px;
 }
 
+.panel-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .compact-heading input {
   width: min(240px, 45%);
 }
@@ -367,6 +373,17 @@ button {
   border-radius: 8px;
   padding: 12px;
   background: #ffffff;
+}
+
+.status-group-button {
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.status-group-button:hover {
+  border-color: var(--accent);
 }
 
 .list-row {
@@ -435,9 +452,16 @@ button {
   gap: 16px;
 }
 
-.student-form {
+.student-form,
+.csv-import-form,
+.template-form {
   display: grid;
   gap: 12px;
+}
+
+.import-panel,
+.template-panel {
+  margin-top: 18px;
 }
 
 label,
@@ -563,6 +587,13 @@ textarea {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .action-row.complete {

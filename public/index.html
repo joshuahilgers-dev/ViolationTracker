@@ -160,6 +160,7 @@
                 <label>Contact <input name="guardian_contact"></label>
                 <label>Device tag <input name="device_asset_tag"></label>
                 <button type="submit" class="primary-button">Add student</button>
+                <span id="student-message" role="status"></span>
               </form>
             </section>
             <section class="panel">
@@ -170,6 +171,22 @@
               <div id="student-list" class="student-list"></div>
             </section>
           </div>
+          <section class="panel import-panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Import Students From CSV</h3>
+                <p class="panel-note">Required columns: first name and last name. Student ID and all other fields are optional.</p>
+              </div>
+            </div>
+            <form id="csv-import-form" class="csv-import-form">
+              <label>
+                CSV file
+                <input type="file" name="csv_file" accept=".csv,text/csv" required>
+              </label>
+              <button type="submit" class="primary-button">Import CSV</button>
+              <span id="csv-message" role="status"></span>
+            </form>
+          </section>
           <section class="panel detail-panel" id="student-detail" hidden></section>
         </section>
 
@@ -181,6 +198,30 @@
             </div>
           </div>
           <div id="action-list" class="action-list"></div>
+        </section>
+
+        <section class="view" id="followups-view">
+          <div class="page-heading">
+            <div>
+              <h2 id="followups-title">Follow-Ups</h2>
+              <p id="followups-subtitle">Complete open items and print forms when needed.</p>
+            </div>
+            <button class="quiet-button" data-open-view="actions">Back to queue</button>
+          </div>
+          <div id="followups-detail" class="followups-detail"></div>
+        </section>
+
+        <section class="view" id="status-view">
+          <div class="page-heading">
+            <div>
+              <h2 id="status-title">Current Step</h2>
+              <p id="status-subtitle">Students currently in this intervention step.</p>
+            </div>
+            <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
+          </div>
+          <section class="panel">
+            <div id="status-student-list" class="student-list"></div>
+          </section>
         </section>
 
         <section class="view" id="settings-view">
@@ -205,6 +246,32 @@
               <div id="infraction-settings" class="infraction-settings"></div>
             </section>
           </div>
+          <section class="panel template-panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Printable Forms</h3>
+                <p class="panel-note">Upload forms staff may need to print from the follow-up queue.</p>
+              </div>
+            </div>
+            <form id="template-form" class="template-form">
+              <label>
+                Follow-up type
+                <select name="action_type" required>
+                  <option value="digital_reflection">Digital Impact Reflection due</option>
+                  <option value="success_contract">Technology Success Contract due</option>
+                  <option value="device_restriction">5 school-day device restriction</option>
+                  <option value="admin_review">Admin review</option>
+                </select>
+              </label>
+              <label>
+                Form file
+                <input type="file" name="template_file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" required>
+              </label>
+              <button type="submit" class="primary-button">Upload form</button>
+              <span id="template-message" role="status"></span>
+            </form>
+            <div id="template-list" class="template-list"></div>
+          </section>
         </section>
       </main>
     </div>

@@ -3,8 +3,11 @@ const state = {
   currentUser: null,
   students: [],
   infractionTypes: [],
+  templates: [],
   openActions: [],
-  selectedStudentId: null
+  selectedStudentId: null,
+  selectedFollowupStudentId: null,
+  selectedStatusKey: null
 };
 
 const statusOrder = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor"];
@@ -35,11 +38,23 @@ const els = {
   incidentForm: document.querySelector("#incident-form"),
   incidentMessage: document.querySelector("#incident-message"),
   studentForm: document.querySelector("#student-form"),
+  studentMessage: document.querySelector("#student-message"),
+  csvImportForm: document.querySelector("#csv-import-form"),
+  csvMessage: document.querySelector("#csv-message"),
   studentList: document.querySelector("#student-list"),
   studentSearch: document.querySelector("#student-search"),
   studentDetail: document.querySelector("#student-detail"),
   clearStudentsButton: document.querySelector("#clear-students-button"),
   actionList: document.querySelector("#action-list"),
+  followupsTitle: document.querySelector("#followups-title"),
+  followupsSubtitle: document.querySelector("#followups-subtitle"),
+  followupsDetail: document.querySelector("#followups-detail"),
+  statusTitle: document.querySelector("#status-title"),
+  statusSubtitle: document.querySelector("#status-subtitle"),
+  statusStudentList: document.querySelector("#status-student-list"),
+  templateForm: document.querySelector("#template-form"),
+  templateMessage: document.querySelector("#template-message"),
+  templateList: document.querySelector("#template-list"),
   infractionSettings: document.querySelector("#infraction-settings")
 };
 
@@ -149,6 +164,7 @@ async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.students = data.students;
   state.infractionTypes = data.infractionTypes;
+  state.templates = data.templates || [];
   state.openActions = data.openActions;
   renderAll();
 }
@@ -161,6 +177,7 @@ function renderAll() {
   renderStatusGroups();
   renderStudents();
   renderActions();
+  renderTemplates();
   renderInfractionSettings();
 }
 
@@ -202,9 +219,9 @@ function renderInfractionOptions() {
 }
 
 function renderDashboardActions() {
-  const actions = state.openActions.slice(0, 6);
-  els.dashboardActions.innerHTML = actions.length
-    ? actions.map(actionCard).join("")
+  const groups = groupOpenActionsByStudent().slice(0, 6);
+  els.dashboardActions.innerHTML = groups.length
+    ? groups.map(followupStudentCard).join("")
     : `<div class="empty">No open follow-ups right now.</div>`;
 }
 
@@ -212,10 +229,10 @@ function renderStatusGroups() {
   els.statusGroups.innerHTML = statusOrder.map(key => {
     const students = state.students.filter(student => student.status.key === key);
     return `
-      <div class="status-group">
+      <button class="status-group status-group-button" type="button" data-status-key="${key}">
         <h4><span class="badge ${key}">${statusLabels[key]}</span> ${students.length}</h4>
-        <div class="meta">${students.slice(0, 5).map(student => escapeHtml(`${student.first_name} ${student.last_name}`)).join(" | ") || "No students"}</div>
-      </div>
+        <div class="meta">${escapeHtml(students.length === 1 ? "1 student" : `${students.length} students`)}</div>
+      </button>
     `;
   }).join("");
 }
@@ -245,27 +262,68 @@ function renderStudents() {
 }
 
 function renderActions() {
-  els.actionList.innerHTML = state.openActions.length
-    ? state.openActions.map(actionCard).join("")
+  const groups = groupOpenActionsByStudent();
+  els.actionList.innerHTML = groups.length
+    ? groups.map(followupStudentCard).join("")
     : `<div class="empty">No open follow-ups right now.</div>`;
 }
 
+function groupOpenActionsByStudent() {
+  const map = new Map();
+  for (const action of state.openActions) {
+    const studentId = Number(action.student_id);
+    if (!map.has(studentId)) {
+      map.set(studentId, {
+        student_id: studentId,
+        student_name: action.student_name || `${action.first_name || ""} ${action.last_name || ""}`.trim(),
+        grade: action.grade,
+        actions: []
+      });
+    }
+    map.get(studentId).actions.push(action);
+  }
+  return [...map.values()].sort((a, b) => a.student_name.localeCompare(b.student_name));
+}
+
+function followupStudentCard(group) {
+  const titles = group.actions.map(action => action.title).join(" | ");
+  return `
+    <article class="action-row">
+      <div>
+        <h4>${escapeHtml(group.student_name)}</h4>
+        <div class="meta">
+          <span>${group.grade ? `Grade ${escapeHtml(group.grade)}` : "Grade not set"}</span>
+          <span>${group.actions.length} open follow-up${group.actions.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="meta">${escapeHtml(titles)}</div>
+      </div>
+      <button class="primary-button" data-followup-student-id="${group.student_id}">Complete</button>
+    </article>
+  `;
+}
+
 function actionCard(action) {
-  const studentName = action.student_name || `${action.first_name || ""} ${action.last_name || ""}`.trim();
+  const template = templateForAction(action.action_type);
   return `
     <article class="action-row">
       <div>
         <h4>${escapeHtml(action.title)}</h4>
         <div class="meta">
-          <span>${escapeHtml(studentName)}</span>
           <span>Owner: ${escapeHtml(action.owner || "Unassigned")}</span>
           <span>Due: ${escapeHtml(action.due_on || "No date")}</span>
         </div>
         ${action.notes ? `<div class="meta">${escapeHtml(action.notes)}</div>` : ""}
       </div>
-      <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
+      <div class="row-actions">
+        ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
+        <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
+      </div>
     </article>
   `;
+}
+
+function templateForAction(actionType) {
+  return state.templates.find(template => template.action_type === actionType);
 }
 
 function renderInfractionSettings() {
@@ -287,6 +345,73 @@ function renderInfractionSettings() {
       </div>
     `;
   }).join("");
+}
+
+function renderTemplates() {
+  const labels = Object.fromEntries([...els.templateForm.elements.action_type.options].map(option => [option.value, option.textContent]));
+  els.templateList.innerHTML = Object.entries(labels).map(([actionType, label]) => {
+    const template = templateForAction(actionType);
+    return `
+      <article class="list-row">
+        <div>
+          <h4>${escapeHtml(label)}</h4>
+          <div class="meta">${template ? `Uploaded: ${escapeHtml(template.original_name)}` : "No form uploaded"}</div>
+        </div>
+        ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
+      </article>
+    `;
+  }).join("");
+}
+
+function renderStatusStudents(key) {
+  state.selectedStatusKey = key;
+  const students = state.students.filter(student => student.status.key === key);
+  els.statusTitle.textContent = statusLabels[key] || "Current Step";
+  els.statusSubtitle.textContent = students.length === 1 ? "1 student currently in this step." : `${students.length} students currently in this step.`;
+  els.statusStudentList.innerHTML = students.length
+    ? students.map(student => `
+      <article class="list-row">
+        <div>
+          <h4>${escapeHtml(student.last_name)}, ${escapeHtml(student.first_name)}</h4>
+          <div class="meta">
+            <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
+            <span>${student.violation_count} total</span>
+            <span>${student.minor_count} minor</span>
+            <span>${student.major_count} major</span>
+          </div>
+        </div>
+        <button class="quiet-button" data-student-id="${student.id}">Review</button>
+      </article>
+    `).join("")
+    : `<div class="empty">No students currently in this step.</div>`;
+  switchView("status");
+}
+
+async function showFollowups(studentId) {
+  const student = await api(`/api/students/${studentId}`);
+  state.selectedFollowupStudentId = studentId;
+  const openActions = student.actions.filter(action => action.status === "open");
+  els.followupsTitle.textContent = `${student.first_name} ${student.last_name}`;
+  els.followupsSubtitle.textContent = openActions.length === 1 ? "1 open follow-up needs attention." : `${openActions.length} open follow-ups need attention.`;
+  els.followupsDetail.innerHTML = `
+    <section class="panel">
+      <div class="detail-header">
+        <div>
+          <h3>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</h3>
+          <div class="meta">
+            <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
+            <span>${student.student_number ? `ID ${escapeHtml(student.student_number)}` : "No student ID"}</span>
+            <span>${escapeHtml(student.status.label)}</span>
+          </div>
+        </div>
+        <button class="quiet-button" data-student-id="${student.id}">Open student record</button>
+      </div>
+      <div class="timeline">
+        ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
+      </div>
+    </section>
+  `;
+  switchView("followups");
 }
 
 async function showStudentDetail(id) {
@@ -343,12 +468,120 @@ async function createStudent(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
+  const studentName = `${payload.first_name || ""} ${payload.last_name || ""}`.trim();
+  els.studentMessage.textContent = "Saving...";
   await api("/api/students", {
     method: "POST",
     body: JSON.stringify(payload)
   });
   event.currentTarget.reset();
   await loadBootstrap();
+  els.studentMessage.textContent = `${studentName} was added.`;
+  setTimeout(() => { els.studentMessage.textContent = ""; }, 5000);
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (quoted && char === "\"" && next === "\"") {
+      value += "\"";
+      i += 1;
+    } else if (char === "\"") {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(value.trim());
+      value = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(value.trim());
+      if (row.some(cell => cell !== "")) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+  row.push(value.trim());
+  if (row.some(cell => cell !== "")) rows.push(row);
+  return rows;
+}
+
+function normalizeHeader(header) {
+  return header.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function studentFieldForHeader(header) {
+  const key = normalizeHeader(header);
+  const map = {
+    firstname: "first_name",
+    first: "first_name",
+    fname: "first_name",
+    lastname: "last_name",
+    last: "last_name",
+    lname: "last_name",
+    studentid: "student_number",
+    studentnumber: "student_number",
+    id: "student_number",
+    number: "student_number",
+    grade: "grade",
+    team: "team",
+    parent: "guardian_name",
+    guardian: "guardian_name",
+    guardianname: "guardian_name",
+    parentguardian: "guardian_name",
+    contact: "guardian_contact",
+    parentcontact: "guardian_contact",
+    guardiancontact: "guardian_contact",
+    email: "guardian_contact",
+    phone: "guardian_contact",
+    devicetag: "device_asset_tag",
+    assettag: "device_asset_tag",
+    deviceassettag: "device_asset_tag",
+    chromebook: "device_asset_tag"
+  };
+  return map[key] || null;
+}
+
+async function importCsv(event) {
+  event.preventDefault();
+  const file = els.csvImportForm.elements.csv_file.files[0];
+  if (!file) return;
+  els.csvMessage.textContent = "Reading CSV...";
+  const rows = parseCsv(await file.text());
+  if (rows.length < 2) {
+    els.csvMessage.textContent = "CSV must include a header row and at least one student.";
+    return;
+  }
+  const fields = rows[0].map(studentFieldForHeader);
+  const students = rows.slice(1).map(row => {
+    const student = {};
+    fields.forEach((field, index) => {
+      if (field) student[field] = row[index] || "";
+    });
+    return student;
+  }).filter(student => student.first_name && student.last_name);
+
+  if (students.length === 0) {
+    els.csvMessage.textContent = "No students found. Check first name and last name column headers.";
+    return;
+  }
+
+  els.csvMessage.textContent = `Importing ${students.length} students...`;
+  const result = await api("/api/students/import", {
+    method: "POST",
+    body: JSON.stringify({ students })
+  });
+  els.csvImportForm.reset();
+  await loadBootstrap();
+  els.csvMessage.textContent = `${result.created} added, ${result.updated} updated, ${result.skipped} skipped.`;
+  if (result.errors?.length) {
+    console.warn("CSV import errors", result.errors);
+  }
 }
 
 async function createIncident(event) {
@@ -373,7 +606,47 @@ async function completeAction(id) {
     body: JSON.stringify({ status: "complete" })
   });
   await loadBootstrap();
+  if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
   if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+}
+
+function printTemplate(url) {
+  const win = window.open(url, "_blank", "noopener");
+  if (!win) return;
+  win.addEventListener("load", () => win.print(), { once: true });
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadTemplate(event) {
+  event.preventDefault();
+  const file = els.templateForm.elements.template_file.files[0];
+  if (!file) return;
+  const actionType = els.templateForm.elements.action_type.value;
+  const label = els.templateForm.elements.action_type.selectedOptions[0].textContent;
+  els.templateMessage.textContent = "Uploading...";
+  const template = await api("/api/templates", {
+    method: "POST",
+    body: JSON.stringify({
+      action_type: actionType,
+      label,
+      original_name: file.name,
+      mime_type: file.type || "application/octet-stream",
+      content_base64: await readFileAsBase64(file)
+    })
+  });
+  state.templates = state.templates.filter(item => item.action_type !== template.action_type).concat(template);
+  els.templateForm.reset();
+  renderTemplates();
+  els.templateMessage.textContent = `${label} form uploaded.`;
+  setTimeout(() => { els.templateMessage.textContent = ""; }, 5000);
 }
 
 async function deleteStudent(id, name) {
@@ -420,10 +693,22 @@ document.addEventListener("click", event => {
   if (openView) switchView(openView.dataset.openView);
 
   const studentButton = event.target.closest("[data-student-id]");
-  if (studentButton) showStudentDetail(Number(studentButton.dataset.studentId));
+  if (studentButton) {
+    switchView("students");
+    showStudentDetail(Number(studentButton.dataset.studentId));
+  }
 
   const completeButton = event.target.closest("[data-complete-action]");
   if (completeButton) completeAction(Number(completeButton.dataset.completeAction));
+
+  const followupButton = event.target.closest("[data-followup-student-id]");
+  if (followupButton) showFollowups(Number(followupButton.dataset.followupStudentId));
+
+  const printButton = event.target.closest("[data-print-template]");
+  if (printButton) printTemplate(printButton.dataset.printTemplate);
+
+  const statusButton = event.target.closest("[data-status-key]");
+  if (statusButton) renderStatusStudents(statusButton.dataset.statusKey);
 
   const deleteStudentButton = event.target.closest("[data-delete-student]");
   if (deleteStudentButton) {
@@ -433,8 +718,10 @@ document.addEventListener("click", event => {
 
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
+els.csvImportForm.addEventListener("submit", importCsv);
 els.studentSearch.addEventListener("input", renderStudents);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
+els.templateForm.addEventListener("submit", uploadTemplate);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();

@@ -11,6 +11,7 @@ const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
+const TEMPLATE_DIR = path.join(DATA_DIR, "templates");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
@@ -26,6 +27,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
 
 let db;
 let statements;
@@ -135,6 +137,15 @@ function migrate() {
       message TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS action_templates (
+      action_type TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `, true);
 
   const count = prepare("SELECT COUNT(*) AS count FROM infraction_types").get().count;
@@ -192,9 +203,24 @@ function prepareStatements() {
     ORDER BY s.last_name, s.first_name
   `),
   getStudent: prepare("SELECT * FROM students WHERE id = ?"),
+  getStudentByNumber: prepare(`
+    SELECT * FROM students WHERE student_number = ? AND student_number IS NOT NULL AND student_number != '' LIMIT 1
+  `),
   createStudent: prepare(`
     INSERT INTO students (student_number, first_name, last_name, grade, team, guardian_name, guardian_contact, device_asset_tag)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateStudentByNumber: prepare(`
+    UPDATE students
+    SET first_name = ?,
+        last_name = ?,
+        grade = COALESCE(?, grade),
+        team = COALESCE(?, team),
+        guardian_name = COALESCE(?, guardian_name),
+        guardian_contact = COALESCE(?, guardian_contact),
+        device_asset_tag = COALESCE(?, device_asset_tag),
+        active = 1
+    WHERE student_number = ?
   `),
   deleteStudent: prepare(`
     DELETE FROM students WHERE id = ?
@@ -252,6 +278,22 @@ function prepareStatements() {
       MAX(occurred_on) AS last_incident_on
     FROM incidents
     WHERE student_id = ?
+  `),
+  listTemplates: prepare(`
+    SELECT * FROM action_templates ORDER BY label
+  `),
+  getTemplate: prepare(`
+    SELECT * FROM action_templates WHERE action_type = ?
+  `),
+  upsertTemplate: prepare(`
+    INSERT INTO action_templates (action_type, label, original_name, stored_name, mime_type, uploaded_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(action_type) DO UPDATE SET
+      label = excluded.label,
+      original_name = excluded.original_name,
+      stored_name = excluded.stored_name,
+      mime_type = excluded.mime_type,
+      uploaded_at = CURRENT_TIMESTAMP
   `)
 };
 }
@@ -369,6 +411,20 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+function sendFile(res, filePath, mimeType) {
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.writeHead(404);
+      return res.end("Not found");
+    }
+    res.writeHead(200, {
+      "content-type": mimeType || "application/octet-stream",
+      "cache-control": "private, max-age=300"
+    });
+    res.end(data);
+  });
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   return Object.fromEntries(header.split(";").map(part => {
@@ -457,7 +513,7 @@ function readBody(req) {
     let body = "";
     req.on("data", chunk => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > 8_000_000) {
         reject(new Error("Request body too large"));
         req.destroy();
       }
@@ -484,6 +540,57 @@ function required(value, label) {
 function nullable(value) {
   if (value === undefined || value === null || String(value).trim() === "") return null;
   return String(value).trim();
+}
+
+function templateUrl(template) {
+  if (!template) return null;
+  return `/templates/${encodeURIComponent(template.action_type)}/file`;
+}
+
+function templateView(template) {
+  return {
+    action_type: template.action_type,
+    label: template.label,
+    original_name: template.original_name,
+    mime_type: template.mime_type,
+    uploaded_at: template.uploaded_at,
+    url: templateUrl(template)
+  };
+}
+
+function safeTemplateFileName(actionType, originalName) {
+  const ext = path.extname(originalName || "").toLowerCase().replace(/[^a-z0-9.]/g, "") || ".pdf";
+  return `${actionType}-${Date.now()}${ext}`;
+}
+
+function createOrUpdateStudent(row) {
+  const firstName = required(row.first_name, "First name");
+  const lastName = required(row.last_name, "Last name");
+  const studentNumber = nullable(row.student_number);
+  if (studentNumber && statements.getStudentByNumber.get(studentNumber)) {
+    statements.updateStudentByNumber.run(
+      firstName,
+      lastName,
+      nullable(row.grade),
+      nullable(row.team),
+      nullable(row.guardian_name),
+      nullable(row.guardian_contact),
+      nullable(row.device_asset_tag),
+      studentNumber
+    );
+    return "updated";
+  }
+  statements.createStudent.run(
+    studentNumber,
+    firstName,
+    lastName,
+    nullable(row.grade),
+    nullable(row.team),
+    nullable(row.guardian_name),
+    nullable(row.guardian_contact),
+    nullable(row.device_asset_tag)
+  );
+  return "created";
 }
 
 async function handleApi(req, res, url) {
@@ -538,12 +645,22 @@ async function handleApi(req, res, url) {
 
   requireAuth(req);
 
+  const templateFileMatch = url.pathname.match(/^\/templates\/([^/]+)\/file$/);
+  if (req.method === "GET" && templateFileMatch) {
+    const actionType = decodeURIComponent(templateFileMatch[1]);
+    const template = statements.getTemplate.get(actionType);
+    if (!template) return sendJson(res, 404, { error: "Template not found" });
+    return sendFile(res, path.join(TEMPLATE_DIR, template.stored_name), template.mime_type);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const search = "";
     const students = statements.listStudents.all(search, "%%").map(toStudentView);
+    const templates = statements.listTemplates.all().map(templateView);
     return sendJson(res, 200, {
       students,
       infractionTypes: statements.listInfractions.all(),
+      templates,
       openActions: statements.openActions.all().map(action => ({
         ...action,
         student_name: `${action.first_name} ${action.last_name}`
@@ -559,20 +676,28 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/students") {
     const body = await readBody(req);
-    const firstName = required(body.first_name, "First name");
-    const lastName = required(body.last_name, "Last name");
-    const result = statements.createStudent.run(
-      nullable(body.student_number),
-      firstName,
-      lastName,
-      nullable(body.grade),
-      nullable(body.team),
-      nullable(body.guardian_name),
-      nullable(body.guardian_contact),
-      nullable(body.device_asset_tag)
-    );
-    statements.addAudit.run("student", result.lastInsertRowid, `Student ${firstName} ${lastName} was added.`);
-    return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
+    const mode = createOrUpdateStudent(body);
+    statements.addAudit.run("student", 0, `Student ${body.first_name} ${body.last_name} was ${mode}.`);
+    return sendJson(res, 201, { mode });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/students/import") {
+    const body = await readBody(req);
+    if (!Array.isArray(body.students)) {
+      return sendJson(res, 400, { error: "Students array is required." });
+    }
+    const result = { created: 0, updated: 0, skipped: 0, errors: [] };
+    body.students.forEach((student, index) => {
+      try {
+        const mode = createOrUpdateStudent(student);
+        result[mode] += 1;
+      } catch (error) {
+        result.skipped += 1;
+        result.errors.push({ row: index + 2, error: error.message });
+      }
+    });
+    statements.addAudit.run("student", 0, `CSV import completed: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped.`);
+    return sendJson(res, 200, result);
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/students") {
@@ -643,6 +768,32 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/templates") {
+    return sendJson(res, 200, statements.listTemplates.all().map(templateView));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/templates") {
+    const body = await readBody(req);
+    const actionType = required(body.action_type, "Action type");
+    const label = required(body.label, "Label");
+    const originalName = required(body.original_name, "File name");
+    const mimeType = nullable(body.mime_type) || "application/octet-stream";
+    const base64 = required(body.content_base64, "File content");
+    const storedName = safeTemplateFileName(actionType, originalName);
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.length > 5_000_000) {
+      return sendJson(res, 400, { error: "Template file must be 5 MB or smaller." });
+    }
+    fs.writeFileSync(path.join(TEMPLATE_DIR, storedName), bytes);
+    const previous = statements.getTemplate.get(actionType);
+    statements.upsertTemplate.run(actionType, label, originalName, storedName, mimeType);
+    if (previous?.stored_name && previous.stored_name !== storedName) {
+      fs.rmSync(path.join(TEMPLATE_DIR, previous.stored_name), { force: true });
+    }
+    statements.addAudit.run("template", 0, `${label} template was uploaded.`);
+    return sendJson(res, 200, templateView(statements.getTemplate.get(actionType)));
+  }
+
   return sendJson(res, 404, { error: "Not found" });
 }
 
@@ -679,7 +830,7 @@ function serveStatic(req, res, url) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
-    if (url.pathname.startsWith("/api/")) {
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/templates/")) {
       await handleApi(req, res, url);
     } else {
       serveStatic(req, res, url);
