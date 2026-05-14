@@ -38,6 +38,7 @@ const els = {
   studentList: document.querySelector("#student-list"),
   studentSearch: document.querySelector("#student-search"),
   studentDetail: document.querySelector("#student-detail"),
+  clearStudentsButton: document.querySelector("#clear-students-button"),
   actionList: document.querySelector("#action-list"),
   infractionSettings: document.querySelector("#infraction-settings")
 };
@@ -303,7 +304,10 @@ async function showStudentDetail(id) {
           <span>${student.device_asset_tag ? `Device ${escapeHtml(student.device_asset_tag)}` : "No device tag"}</span>
         </div>
       </div>
-      <span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>
+      <div class="detail-actions">
+        <span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>
+        <button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>
+      </div>
     </div>
     <div class="detail-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
@@ -372,6 +376,32 @@ async function completeAction(id) {
   if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
 }
 
+async function deleteStudent(id, name) {
+  const confirmed = window.confirm(`Delete ${name} and all related violations/actions? This cannot be undone.`);
+  if (!confirmed) return;
+  await api(`/api/students/${id}`, {
+    method: "DELETE",
+    body: JSON.stringify({})
+  });
+  state.selectedStudentId = null;
+  els.studentDetail.hidden = true;
+  els.studentDetail.innerHTML = "";
+  await loadBootstrap();
+}
+
+async function clearAllStudents() {
+  const phrase = window.prompt("This will delete every student plus all violation history and action items. Type DELETE ALL STUDENTS to continue.");
+  if (phrase !== "DELETE ALL STUDENTS") return;
+  await api("/api/students", {
+    method: "DELETE",
+    body: JSON.stringify({ confirmation: phrase })
+  });
+  state.selectedStudentId = null;
+  els.studentDetail.hidden = true;
+  els.studentDetail.innerHTML = "";
+  await loadBootstrap();
+}
+
 async function logout() {
   await api("/api/auth/logout", {
     method: "POST",
@@ -394,11 +424,17 @@ document.addEventListener("click", event => {
 
   const completeButton = event.target.closest("[data-complete-action]");
   if (completeButton) completeAction(Number(completeButton.dataset.completeAction));
+
+  const deleteStudentButton = event.target.closest("[data-delete-student]");
+  if (deleteStudentButton) {
+    deleteStudent(Number(deleteStudentButton.dataset.deleteStudent), deleteStudentButton.dataset.studentName);
+  }
 });
 
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
 els.studentSearch.addEventListener("input", renderStudents);
+els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();

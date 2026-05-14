@@ -515,6 +515,14 @@ textarea {
   margin-bottom: 16px;
 }
 
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(140px, 1fr));

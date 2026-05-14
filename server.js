@@ -196,6 +196,18 @@ function prepareStatements() {
     INSERT INTO students (student_number, first_name, last_name, grade, team, guardian_name, guardian_contact, device_asset_tag)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  deleteStudent: prepare(`
+    DELETE FROM students WHERE id = ?
+  `),
+  clearStudents: prepare(`
+    DELETE FROM students
+  `),
+  clearOrphanedActions: prepare(`
+    DELETE FROM actions WHERE student_id NOT IN (SELECT id FROM students)
+  `),
+  clearOrphanedIncidents: prepare(`
+    DELETE FROM incidents WHERE student_id NOT IN (SELECT id FROM students)
+  `),
   listInfractions: prepare(`
     SELECT * FROM infraction_types WHERE active = 1 ORDER BY severity, category, label
   `),
@@ -563,6 +575,18 @@ async function handleApi(req, res, url) {
     return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
   }
 
+  if (req.method === "DELETE" && url.pathname === "/api/students") {
+    const body = await readBody(req);
+    if (body.confirmation !== "DELETE ALL STUDENTS") {
+      return sendJson(res, 400, { error: "Confirmation phrase is required." });
+    }
+    statements.clearStudents.run();
+    statements.clearOrphanedActions.run();
+    statements.clearOrphanedIncidents.run();
+    statements.addAudit.run("student", 0, "All student test records were deleted.");
+    return sendJson(res, 200, { ok: true });
+  }
+
   const studentMatch = url.pathname.match(/^\/api\/students\/(\d+)$/);
   if (req.method === "GET" && studentMatch) {
     const id = Number(studentMatch[1]);
@@ -576,6 +600,15 @@ async function handleApi(req, res, url) {
       incidents: statements.incidentsForStudent.all(id),
       actions: statements.actionsForStudent.all(id)
     });
+  }
+
+  if (req.method === "DELETE" && studentMatch) {
+    const id = Number(studentMatch[1]);
+    const student = statements.getStudent.get(id);
+    if (!student) return sendJson(res, 404, { error: "Student not found" });
+    statements.deleteStudent.run(id);
+    statements.addAudit.run("student", id, `Student ${student.first_name} ${student.last_name} was deleted.`);
+    return sendJson(res, 200, { ok: true });
   }
 
   if (req.method === "POST" && url.pathname === "/api/incidents") {
