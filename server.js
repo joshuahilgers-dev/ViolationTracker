@@ -953,7 +953,10 @@ function serveStatic(req, res, url) {
       res.writeHead(404);
       return res.end("Not found");
     }
-    res.writeHead(200, { "content-type": contentType(filePath) });
+    res.writeHead(200, {
+      "content-type": contentType(filePath),
+      "cache-control": "no-store"
+    });
     res.end(data);
   });
 }

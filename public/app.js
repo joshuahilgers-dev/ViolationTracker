@@ -174,7 +174,7 @@ async function loadBootstrap() {
 
 function populateReporterEmail() {
   const field = els.incidentForm.elements.reported_by;
-  if (field && state.currentUser?.email && !field.value.trim()) {
+  if (field && state.currentUser?.email) {
     field.value = state.currentUser.email;
   }
 }
