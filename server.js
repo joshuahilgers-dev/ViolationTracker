@@ -78,6 +78,123 @@ function prepare(sql) {
   };
 }
 
+const INFRACTION_TYPES = [
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Off-Task Use",
+    description: "Playing games, watching non-educational media, web-browsing during instruction."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Inappropriate Communication",
+    description: "Using Google Workspace tools for non-school related messaging or communication."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Unauthorized Audio",
+    description: "Using speakers without permissions (deliberate interruption)."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Device Distraction",
+    description: "Having the screen open when directed to have \"screens down\"."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Minor Negligence",
+    description: "Leaving the Chromebook on the floor or left unattended, carrying it by the screen/case open."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Unauthorized Use",
+    description: "Mishandling or tampering with another student's device."
+  },
+  {
+    severity: "minor",
+    category: "Minor Violations",
+    label: "Other",
+    description: "Please provide details."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Bypassing Security",
+    description: "Using VPS, proxy sites, or unauthorized means, including logging into another student's account."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Cyberbullying/Harassment",
+    description: "Using the device to send threatening messages or create harmful content about others."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Deliberate Damage",
+    description: "Picking off keys, hitting/pounding Chromebook unnecessarily hard, shutting others' Chromebooks while in use causing damage."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Privacy Breach",
+    description: "Recording others without consent or accessing another student's account."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Inappropriate Content",
+    description: "Accessing or distributing sexually explicit material or hate speech."
+  },
+  {
+    severity: "major",
+    category: "Major Violations",
+    label: "Other",
+    description: "Please provide details."
+  }
+];
+
+function infractionKey(type) {
+  return `${type.severity}|${type.label.toLowerCase()}`;
+}
+
+function syncInfractionTypes() {
+  const existing = prepare("SELECT * FROM infraction_types").all();
+  const desiredKeys = new Set(INFRACTION_TYPES.map(infractionKey));
+  const usedIds = new Set();
+  const insert = prepare(`
+    INSERT INTO infraction_types (severity, category, label, description, active)
+    VALUES (?, ?, ?, ?, 1)
+  `);
+  const update = prepare(`
+    UPDATE infraction_types
+    SET category = ?, description = ?, active = 1
+    WHERE id = ?
+  `);
+  const deactivate = prepare("UPDATE infraction_types SET active = 0 WHERE id = ?");
+
+  for (const type of INFRACTION_TYPES) {
+    const match = existing.find(item => !usedIds.has(item.id) && infractionKey(item) === infractionKey(type));
+    if (match) {
+      update.run(type.category, type.description, match.id);
+      usedIds.add(match.id);
+    } else {
+      insert.run(type.severity, type.category, type.label, type.description);
+    }
+  }
+
+  for (const item of existing) {
+    if (!desiredKeys.has(infractionKey(item)) || !usedIds.has(item.id)) {
+      deactivate.run(item.id);
+    }
+  }
+}
+
 function migrate() {
   execSql(`
     CREATE TABLE IF NOT EXISTS students (
@@ -148,43 +265,7 @@ function migrate() {
     );
   `, true);
 
-  const count = prepare("SELECT COUNT(*) AS count FROM infraction_types").get().count;
-  if (count === 0) {
-    const insert = prepare(`
-      INSERT INTO infraction_types (severity, category, label, description)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    const minorTypes = [
-      ["Respectful Use", "Forgot the human", "Interacting online without regard for the person behind the screen."],
-      ["Respectful Use", "Crossed boundaries", "Recording or sharing someone's picture without permission."],
-      ["Respectful Use", "Plagiarism", "Using a creator's images or ideas without proper credit."],
-      ["Responsible Use", "Poor balance", "Failing to maintain a healthy balance between online and offline activities."],
-      ["Responsible Use", "Missed interaction", "Not closing or locking the screen during face-to-face time."],
-      ["Responsible Use", "Safety risk", "Not protecting personal information or passwords."],
-      ["Responsible Use", "Reckless care or abandonment", "Damage, careless handling, or leaving a device unsecured."],
-      ["Responsible Use", "Careless footprint", "Ignoring school guidelines or permanent digital footprint expectations."],
-      ["Resourceful Use", "Entertainment only", "Using school technology strictly for entertainment."],
-      ["Resourceful Use", "Off-task", "Using the device for things unrelated to school topics or learning."],
-      ["Resourceful Use", "Unreported issue", "Not informing staff about a technical problem or blocked resource."],
-      ["Resourceful Use", "Disorganized", "Not using digital tools to manage time or organize work."]
-    ];
-
-    const majorTypes = [
-      ["Major Conduct", "Purposeful misuse", "Device use that substantially disrupts class or intentionally bypasses expectations."],
-      ["Major Conduct", "Digital disrespect", "Harassment, threats, serious cyberbullying, or harmful communication."],
-      ["Major Conduct", "Privacy or recording breach", "Unauthorized recording, sharing, account access, or exposure of private information."],
-      ["Major Conduct", "Device damage or loss", "Intentional damage, theft, repeated unsafe handling, or abandonment of school equipment."],
-      ["Major Conduct", "Academic integrity", "Serious plagiarism, unauthorized AI/tool use, cheating, or impersonation."]
-    ];
-
-    for (const [category, label, description] of minorTypes) {
-      insert.run("minor", category, label, description);
-    }
-    for (const [category, label, description] of majorTypes) {
-      insert.run("major", category, label, description);
-    }
-  }
+  syncInfractionTypes();
 }
 
 function prepareStatements() {
