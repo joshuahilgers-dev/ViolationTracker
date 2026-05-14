@@ -97,6 +97,7 @@ function showApp(user) {
   els.appShell.hidden = false;
   els.signedInName.textContent = user.name || "Signed in";
   els.signedInEmail.textContent = user.email || "";
+  populateReporterEmail();
 }
 
 async function loadAuth() {
@@ -168,6 +169,14 @@ async function loadBootstrap() {
   state.templates = data.templates || [];
   state.openActions = data.openActions;
   renderAll();
+  populateReporterEmail();
+}
+
+function populateReporterEmail() {
+  const field = els.incidentForm.elements.reported_by;
+  if (field && state.currentUser?.email && !field.value.trim()) {
+    field.value = state.currentUser.email;
+  }
 }
 
 function renderAll() {
@@ -215,7 +224,7 @@ function renderInfractionOptions() {
   const select = els.incidentForm.elements.infraction_type_id;
   const options = state.infractionTypes
     .filter(type => type.severity === severity)
-    .map(type => `<option value="${type.id}">${escapeHtml(type.category)}: ${escapeHtml(type.label)}</option>`);
+    .map(type => `<option value="${type.id}">${escapeHtml(type.label)}</option>`);
   select.innerHTML = options.join("");
 }
 
@@ -358,7 +367,10 @@ function renderTemplates() {
           <h4>${escapeHtml(label)}</h4>
           <div class="meta">${template ? `Uploaded: ${escapeHtml(template.original_name)}` : "No form uploaded"}</div>
         </div>
-        ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
+        <div class="row-actions">
+          ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
+          ${template ? `<button class="danger-button" data-delete-template="${escapeHtml(actionType)}" data-template-label="${escapeHtml(label)}">Delete</button>` : ""}
+        </div>
       </article>
     `;
   }).join("");
@@ -467,19 +479,30 @@ async function showStudentDetail(id) {
 
 async function createStudent(event) {
   event.preventDefault();
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
   const studentName = `${payload.first_name || ""} ${payload.last_name || ""}`.trim();
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Saving...";
   els.studentMessage.textContent = "Saving...";
-  await api("/api/students", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-  event.currentTarget.reset();
-  els.studentSearch.value = "";
-  await loadBootstrap();
-  els.studentMessage.textContent = `${studentName} was added.`;
-  setTimeout(() => { els.studentMessage.textContent = ""; }, 5000);
+  try {
+    const result = await api("/api/students", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    event.currentTarget.reset();
+    els.studentSearch.value = "";
+    await loadBootstrap();
+    els.studentMessage.textContent = `${studentName} was ${result.mode === "updated" ? "updated" : "added"}.`;
+    setTimeout(() => { els.studentMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.studentMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
 }
 
 function parseCsv(text) {
@@ -589,18 +612,31 @@ async function importCsv(event) {
 
 async function createIncident(event) {
   event.preventDefault();
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
   const form = new FormData(event.currentTarget);
   const payload = Object.fromEntries(form.entries());
-  await api("/api/incidents", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-  els.incidentMessage.textContent = "Saved. Next steps were queued.";
-  event.currentTarget.reset();
-  els.incidentForm.elements.occurred_on.value = today();
-  renderInfractionOptions();
-  await loadBootstrap();
-  setTimeout(() => { els.incidentMessage.textContent = ""; }, 4000);
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Saving...";
+  els.incidentMessage.textContent = "Saving...";
+  try {
+    await api("/api/incidents", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    event.currentTarget.reset();
+    els.incidentForm.elements.occurred_on.value = today();
+    populateReporterEmail();
+    renderInfractionOptions();
+    await loadBootstrap();
+    els.incidentMessage.textContent = "Saved. Next steps were queued.";
+    setTimeout(() => { els.incidentMessage.textContent = ""; }, 4000);
+  } catch (error) {
+    els.incidentMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
 }
 
 async function completeAction(id) {
@@ -630,26 +666,55 @@ function readFileAsBase64(file) {
 
 async function uploadTemplate(event) {
   event.preventDefault();
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
   const file = els.templateForm.elements.template_file.files[0];
   if (!file) return;
   const actionType = els.templateForm.elements.action_type.value;
   const label = els.templateForm.elements.action_type.selectedOptions[0].textContent;
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Uploading...";
   els.templateMessage.textContent = "Uploading...";
-  const template = await api("/api/templates", {
-    method: "POST",
-    body: JSON.stringify({
-      action_type: actionType,
-      label,
-      original_name: file.name,
-      mime_type: file.type || "application/octet-stream",
-      content_base64: await readFileAsBase64(file)
-    })
-  });
-  state.templates = state.templates.filter(item => item.action_type !== template.action_type).concat(template);
-  els.templateForm.reset();
-  renderTemplates();
-  els.templateMessage.textContent = `${label} form uploaded.`;
-  setTimeout(() => { els.templateMessage.textContent = ""; }, 5000);
+  try {
+    const template = await api("/api/templates", {
+      method: "POST",
+      body: JSON.stringify({
+        action_type: actionType,
+        label,
+        original_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    state.templates = state.templates.filter(item => item.action_type !== template.action_type).concat(template);
+    els.templateForm.reset();
+    renderTemplates();
+    els.templateMessage.textContent = `${label} form uploaded.`;
+    setTimeout(() => { els.templateMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.templateMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
+async function deleteTemplate(actionType, label) {
+  const confirmed = window.confirm(`Delete the uploaded ${label} form? This cannot be undone.`);
+  if (!confirmed) return;
+  els.templateMessage.textContent = "Deleting...";
+  try {
+    await api(`/api/templates/${encodeURIComponent(actionType)}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    state.templates = state.templates.filter(template => template.action_type !== actionType);
+    renderTemplates();
+    els.templateMessage.textContent = `${label} form deleted.`;
+    setTimeout(() => { els.templateMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.templateMessage.textContent = error.message;
+  }
 }
 
 async function deleteStudent(id, name) {
@@ -709,6 +774,11 @@ document.addEventListener("click", event => {
 
   const printButton = event.target.closest("[data-print-template]");
   if (printButton) printTemplate(printButton.dataset.printTemplate);
+
+  const deleteTemplateButton = event.target.closest("[data-delete-template]");
+  if (deleteTemplateButton) {
+    deleteTemplate(deleteTemplateButton.dataset.deleteTemplate, deleteTemplateButton.dataset.templateLabel);
+  }
 
   const statusButton = event.target.closest("[data-status-key]");
   if (statusButton) renderStatusStudents(statusButton.dataset.statusKey);

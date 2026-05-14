@@ -316,7 +316,10 @@ function prepareStatements() {
     DELETE FROM incidents WHERE student_id NOT IN (SELECT id FROM students)
   `),
   listInfractions: prepare(`
-    SELECT * FROM infraction_types WHERE active = 1 ORDER BY severity, category, label
+    SELECT *
+    FROM infraction_types
+    WHERE active = 1
+    ORDER BY severity, category, CASE WHEN label = 'Other' THEN 1 ELSE 0 END, label
   `),
   createIncident: prepare(`
     INSERT INTO incidents (student_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
@@ -328,6 +331,12 @@ function prepareStatements() {
     LEFT JOIN infraction_types t ON t.id = i.infraction_type_id
     WHERE i.student_id = ?
     ORDER BY i.occurred_on DESC, i.id DESC
+  `),
+  incidentsForStatus: prepare(`
+    SELECT id, severity, occurred_on
+    FROM incidents
+    WHERE student_id = ?
+    ORDER BY occurred_on, id
   `),
   actionsForStudent: prepare(`
     SELECT * FROM actions WHERE student_id = ? ORDER BY status, due_on IS NULL, due_on, created_at DESC
@@ -375,61 +384,82 @@ function prepareStatements() {
       stored_name = excluded.stored_name,
       mime_type = excluded.mime_type,
       uploaded_at = CURRENT_TIMESTAMP
+  `),
+  deleteTemplate: prepare(`
+    DELETE FROM action_templates WHERE action_type = ?
   `)
 };
 }
 
-function statusFromCounts(counts) {
-  const total = Number(counts.total_count || 0);
-  const minor = Number(counts.minor_count || 0);
-  const major = Number(counts.major_count || 0);
-
-  if (total === 0) {
-    return {
-      key: "no_violations",
-      label: "No violations",
-      level: 0,
-      description: "No technology violations are currently recorded."
-    };
-  }
-  if (total >= 5) {
-    return {
-      key: "admin_review",
-      label: "Admin review",
-      level: 5,
-      description: "Chromebook held by admin until next steps are determined."
-    };
-  }
-  if (total >= 4) {
-    return {
-      key: "device_restriction",
-      label: "5 school-day restriction",
-      level: 4,
-      description: "Device held by library/tech staff except when digital access is essential."
-    };
-  }
-  if (major >= 1 || minor >= 3) {
-    return {
-      key: "success_contract",
-      label: "Technology Success Contract",
-      level: 3,
-      description: "Student keeps Chromebook with class check-ins and parent contact."
-    };
-  }
-  if (minor >= 2) {
-    return {
-      key: "reflection",
-      label: "Digital Impact Reflection",
-      level: 2,
-      description: "Student completes reflection and information is sent home."
-    };
-  }
-  return {
+const STATUS_DETAILS = {
+  no_violations: {
+    key: "no_violations",
+    label: "No violations",
+    level: 0,
+    description: "No technology violations are currently recorded."
+  },
+  monitor: {
     key: "monitor",
     label: "Monitor",
     level: 1,
     description: "One minor violation is recorded. Continue monitoring."
-  };
+  },
+  reflection: {
+    key: "reflection",
+    label: "Digital Impact Reflection",
+    level: 2,
+    description: "Student completes reflection and information is sent home."
+  },
+  success_contract: {
+    key: "success_contract",
+    label: "Technology Success Contract",
+    level: 3,
+    description: "Student keeps Chromebook with class check-ins and parent contact."
+  },
+  device_restriction: {
+    key: "device_restriction",
+    label: "5 school-day restriction",
+    level: 4,
+    description: "Device held by library/tech staff except when digital access is essential."
+  },
+  admin_review: {
+    key: "admin_review",
+    label: "Admin review",
+    level: 5,
+    description: "Chromebook held by admin until next steps are determined."
+  }
+};
+
+function statusFromIncidentHistory(incidents) {
+  let key = "no_violations";
+  let minorCount = 0;
+
+  for (const incident of incidents) {
+    if (key === "admin_review") continue;
+    if (key === "device_restriction") {
+      key = "admin_review";
+      continue;
+    }
+    if (key === "success_contract") {
+      key = "device_restriction";
+      continue;
+    }
+    if (incident.severity === "major") {
+      key = "success_contract";
+      continue;
+    }
+
+    minorCount += 1;
+    if (minorCount === 1) key = "monitor";
+    if (minorCount === 2) key = "reflection";
+    if (minorCount >= 3) key = "success_contract";
+  }
+
+  return STATUS_DETAILS[key];
+}
+
+function statusForStudent(studentId) {
+  return statusFromIncidentHistory(statements.incidentsForStatus.all(studentId));
 }
 
 function toStudentView(row) {
@@ -444,7 +474,7 @@ function toStudentView(row) {
     violation_count: Number(row.violation_count || 0),
     minor_count: Number(row.minor_count || 0),
     major_count: Number(row.major_count || 0),
-    status: statusFromCounts(counts)
+    status: statusForStudent(row.id)
   };
 }
 
@@ -459,29 +489,26 @@ function addSchoolDays(dateText, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function ensureWorkflowActions(studentId, incidentId, occurredOn) {
-  const counts = statements.incidentCounts.get(studentId);
-  const total = Number(counts.total_count || 0);
-  const minor = Number(counts.minor_count || 0);
-  const major = Number(counts.major_count || 0);
+function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus, currentStatus) {
+  if (currentStatus.level <= previousStatus.level) return;
 
-  if (minor === 2 && major === 0) {
+  if (currentStatus.key === "reflection") {
     queueAction(studentId, incidentId, "digital_reflection", "Digital Impact Reflection due", occurredOn, "Teacher", "Upload or send completed reflection through ParentSquare.");
     queueAction(studentId, incidentId, "parent_contact_reflection", "Parent contact: reflection", occurredOn, "Teacher", "Notify parent/guardian that the reflection step was assigned.");
   }
 
-  if (minor === 3 || major === 1) {
+  if (currentStatus.key === "success_contract") {
     queueAction(studentId, incidentId, "success_contract", "Technology Success Contract due", occurredOn, "Teacher", "Review contract expectations with student and send home.");
     queueAction(studentId, incidentId, "parent_contact_contract", "Parent contact: success contract", occurredOn, "Teacher", "Share the contract and current violation history.");
   }
 
-  if (total === 4) {
+  if (currentStatus.key === "device_restriction") {
     const returnDate = addSchoolDays(occurredOn, 5);
     queueAction(studentId, incidentId, "device_restriction", "Start 5 school-day device restriction", returnDate, "Library/Tech", "Hold Chromebook except when a digital component is essential.");
     queueAction(studentId, incidentId, "reentry_check", "Schedule re-entry check", returnDate, "Teacher/Admin", "Confirm student can resume regular device access after the restriction.");
   }
 
-  if (total >= 5) {
+  if (currentStatus.key === "admin_review") {
     queueAction(studentId, incidentId, "admin_review", "Admin review needed", occurredOn, "Admin", "Determine next steps, including possible parent conversation or re-entry meeting.");
     queueAction(studentId, incidentId, "parent_contact_admin", "Parent contact: admin review", occurredOn, "Admin", "Document parent/guardian communication for the additional violation.");
   }
@@ -810,7 +837,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       ...student,
       counts,
-      status: statusFromCounts(counts),
+      status: statusForStudent(id),
       incidents: statements.incidentsForStudent.all(id),
       actions: statements.actionsForStudent.all(id)
     });
@@ -834,6 +861,7 @@ async function handleApi(req, res, url) {
     if (!["minor", "major"].includes(severity)) {
       throw Object.assign(new Error("Severity must be minor or major"), { status: 400 });
     }
+    const previousStatus = statusForStudent(studentId);
     const result = statements.createIncident.run(
       studentId,
       occurredOn,
@@ -843,7 +871,8 @@ async function handleApi(req, res, url) {
       body.infraction_type_id ? Number(body.infraction_type_id) : null,
       nullable(body.notes)
     );
-    ensureWorkflowActions(studentId, Number(result.lastInsertRowid), occurredOn);
+    const currentStatus = statusForStudent(studentId);
+    ensureWorkflowActions(studentId, Number(result.lastInsertRowid), occurredOn, previousStatus, currentStatus);
     statements.addAudit.run("incident", result.lastInsertRowid, `${severity} violation entered.`);
     return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
   }
@@ -881,6 +910,19 @@ async function handleApi(req, res, url) {
     }
     statements.addAudit.run("template", 0, `${label} template was uploaded.`);
     return sendJson(res, 200, templateView(statements.getTemplate.get(actionType)));
+  }
+
+  const templateMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
+  if (req.method === "DELETE" && templateMatch) {
+    const actionType = decodeURIComponent(templateMatch[1]);
+    const template = statements.getTemplate.get(actionType);
+    if (!template) return sendJson(res, 404, { error: "Form not found" });
+    statements.deleteTemplate.run(actionType);
+    if (template.stored_name) {
+      fs.rmSync(path.join(TEMPLATE_DIR, template.stored_name), { force: true });
+    }
+    statements.addAudit.run("template", 0, `${template.label} template was deleted.`);
+    return sendJson(res, 200, { ok: true });
   }
 
   return sendJson(res, 404, { error: "Not found" });
