@@ -34,7 +34,8 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_SECURE = process.env.SMTP_SECURE === "1" || process.env.SMTP_SECURE === "true";
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
-const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER || `Technology Violation Tracker <no-reply@${ALLOWED_EMAIL_DOMAIN}>`;
+const SMTP_HELLO = process.env.SMTP_HELLO || "";
+const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || SMTP_USER || `Technology Violation Tracker <no-reply@${ALLOWED_EMAIL_DOMAIN}>`;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 let mailTransporter;
 
@@ -741,6 +742,9 @@ function mailer() {
       port: SMTP_PORT,
       secure: SMTP_SECURE
     };
+    if (SMTP_HELLO) {
+      config.name = SMTP_HELLO;
+    }
     if (SMTP_USER || SMTP_PASS) {
       config.auth = { user: SMTP_USER, pass: SMTP_PASS };
     }
@@ -752,12 +756,15 @@ function mailer() {
 async function sendEmail({ to, subject, text }) {
   const recipients = Array.isArray(to) ? to : parseEmailList(to);
   if (!recipients.length) return { skipped: true };
-  await mailer().sendMail({
-    from: EMAIL_FROM,
-    to: recipients.join(", "),
-    subject,
-    text
-  });
+  const transport = mailer();
+  for (const recipient of recipients) {
+    await transport.sendMail({
+      from: EMAIL_FROM,
+      to: recipient,
+      subject,
+      text
+    });
+  }
   return { sent: true, recipients };
 }
 
