@@ -351,6 +351,7 @@ function prepareStatements() {
       COUNT(i.id) AS violation_count,
       SUM(CASE WHEN i.severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
       SUM(CASE WHEN i.severity = 'major' THEN 1 ELSE 0 END) AS major_count,
+      MAX(i.id) AS last_incident_id,
       MAX(i.occurred_on) AS last_incident_on
     FROM students s
     LEFT JOIN incidents i ON i.student_id = s.id AND i.term_id = ?
@@ -441,6 +442,7 @@ function prepareStatements() {
     FROM actions a
     JOIN students s ON s.id = a.student_id
     WHERE a.status = 'open' AND s.active = 1
+      AND (a.action_type != 'return_chromebook' OR a.due_on IS NULL OR a.due_on <= date('now', 'localtime'))
     ORDER BY a.due_on IS NULL,
       a.due_on,
       CASE a.action_type
@@ -458,6 +460,15 @@ function prepareStatements() {
       a.id
   `),
   getAction: prepare("SELECT * FROM actions WHERE id = ?"),
+  nextReturnActionForStudent: prepare(`
+    SELECT *
+    FROM actions
+    WHERE student_id = ?
+      AND action_type = 'return_chromebook'
+      AND status = 'open'
+    ORDER BY due_on IS NULL, due_on, id
+    LIMIT 1
+  `),
   completeAction: prepare(`
     UPDATE actions
     SET status = ?, completed_on = ?, notes = COALESCE(?, notes)
@@ -638,13 +649,19 @@ function toStudentView(row) {
     major_count: row.major_count,
     last_incident_on: row.last_incident_on
   };
-  return {
+  const student = {
     ...row,
     violation_count: Number(row.violation_count || 0),
     minor_count: Number(row.minor_count || 0),
     major_count: Number(row.major_count || 0),
+    last_incident_id: Number(row.last_incident_id || 0),
     status: statusForStudent(row.id)
   };
+  if (student.status.key === "device_restriction") {
+    const returnAction = statements.nextReturnActionForStudent.get(row.id);
+    student.chromebook_return_on = returnAction?.due_on || null;
+  }
+  return student;
 }
 
 function currentTerm() {

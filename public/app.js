@@ -295,11 +295,33 @@ function renderDashboardActions() {
     : `<div class="empty">No open follow-ups right now.</div>`;
 }
 
+function statusAckKey(key) {
+  return `vtrack.status.${key}.acknowledgedIncidentId`;
+}
+
+function latestIncidentIdForStatus(key) {
+  return state.students
+    .filter(student => student.status.key === key)
+    .reduce((latest, student) => Math.max(latest, Number(student.last_incident_id || 0)), 0);
+}
+
+function statusHasNew(key) {
+  const latest = latestIncidentIdForStatus(key);
+  const acknowledged = Number(localStorage.getItem(statusAckKey(key)) || 0);
+  return latest > acknowledged;
+}
+
+function acknowledgeStatusNew(key) {
+  const latest = latestIncidentIdForStatus(key);
+  if (latest > 0) {
+    localStorage.setItem(statusAckKey(key), String(latest));
+  }
+}
+
 function renderStatusGroups() {
-  const todayText = today();
   els.statusGroups.innerHTML = statusOrder.map(key => {
     const students = state.students.filter(student => student.status.key === key);
-    const hasNew = students.some(student => student.last_incident_on === todayText);
+    const hasNew = statusHasNew(key);
     return `
       <button class="status-group status-group-button" type="button" data-status-key="${key}">
         <h4>
@@ -494,26 +516,45 @@ function renderTemplates() {
 
 function renderStatusStudents(key) {
   state.selectedStatusKey = key;
+  acknowledgeStatusNew(key);
   const students = state.students.filter(student => student.status.key === key);
   els.statusTitle.textContent = statusLabels[key] || "Current Step";
   els.statusSubtitle.textContent = students.length === 1 ? "1 student currently in this step." : `${students.length} students currently in this step.`;
   els.statusStudentList.innerHTML = students.length
-    ? students.map(student => `
-      <article class="list-row">
-        <div>
-          <h4>${escapeHtml(student.last_name)}, ${escapeHtml(student.first_name)}</h4>
-          <div class="meta">
-            <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
-            <span>${student.violation_count} total</span>
-            <span>${student.minor_count} minor</span>
-            <span>${student.major_count} major</span>
-          </div>
-        </div>
-        <button class="quiet-button" data-student-id="${student.id}">Review</button>
-      </article>
-    `).join("")
+    ? students.map(student => statusStudentRow(student, key)).join("")
     : `<div class="empty">No students currently in this step.</div>`;
+  renderStatusGroups();
   switchView("status");
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const [year, month, day] = String(value).split("-");
+  if (!year || !month || !day) return value;
+  return `${month}/${day}/${year}`;
+}
+
+function statusStudentRow(student, key) {
+  const returnBadge = key === "device_restriction" && student.chromebook_return_on
+    ? `<span class="return-date-badge">Return: ${escapeHtml(formatDate(student.chromebook_return_on))}</span>`
+    : "";
+  return `
+    <article class="list-row">
+      <div>
+        <h4>${escapeHtml(student.last_name)}, ${escapeHtml(student.first_name)}</h4>
+        <div class="meta">
+          <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
+          <span>${student.violation_count} total</span>
+          <span>${student.minor_count} minor</span>
+          <span>${student.major_count} major</span>
+        </div>
+      </div>
+      <div class="row-actions">
+        ${returnBadge}
+        <button class="quiet-button" data-student-id="${student.id}">Review</button>
+      </div>
+    </article>
+  `;
 }
 
 function incidentRows(incidents) {
