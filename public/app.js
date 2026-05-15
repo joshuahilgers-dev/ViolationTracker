@@ -41,6 +41,7 @@ const els = {
   incidentForm: document.querySelector("#incident-form"),
   incidentMessage: document.querySelector("#incident-message"),
   incidentStudentSearch: document.querySelector("#incident-student-search"),
+  incidentStudentSelect: document.querySelector("#incident-student-select"),
   incidentStudentOptions: document.querySelector("#incident-student-options"),
   studentForm: document.querySelector("#student-form"),
   studentMessage: document.querySelector("#student-message"),
@@ -239,6 +240,14 @@ function renderMetrics() {
 }
 
 function renderStudentOptions() {
+  const previous = els.incidentForm.elements.student_id.value;
+  els.incidentStudentSelect.innerHTML = [
+    `<option value="">Or choose from full list</option>`,
+    ...state.students.map(student => (
+      `<option value="${student.id}">${escapeHtml(studentOptionLabel(student))}</option>`
+    ))
+  ].join("");
+  els.incidentStudentSelect.value = previous;
   updateIncidentStudentOptions();
 }
 
@@ -277,6 +286,15 @@ function updateIncidentStudentOptions() {
   )).join("");
   const selected = state.students.find(student => studentOptionLabel(student) === query);
   els.incidentForm.elements.student_id.value = selected ? selected.id : "";
+  els.incidentStudentSelect.value = selected ? String(selected.id) : "";
+}
+
+function selectIncidentStudent(studentId) {
+  const selected = state.students.find(student => String(student.id) === String(studentId));
+  els.incidentForm.elements.student_id.value = selected ? selected.id : "";
+  els.incidentStudentSearch.value = selected ? studentOptionLabel(selected) : "";
+  els.incidentStudentSelect.value = selected ? String(selected.id) : "";
+  updateIncidentStudentOptions();
 }
 
 function renderInfractionOptions() {
@@ -827,6 +845,7 @@ async function createIncident(event) {
     });
     formElement.reset();
     els.incidentForm.elements.student_id.value = "";
+    els.incidentStudentSelect.value = "";
     updateIncidentStudentOptions();
     els.incidentForm.elements.occurred_on.value = today();
     populateReporterEmail();
@@ -1113,6 +1132,9 @@ els.incidentForm.addEventListener("change", event => {
 });
 els.incidentStudentSearch.addEventListener("input", updateIncidentStudentOptions);
 els.incidentStudentSearch.addEventListener("change", updateIncidentStudentOptions);
+els.incidentStudentSelect.addEventListener("change", event => {
+  selectIncidentStudent(event.target.value);
+});
 
 els.incidentForm.elements.occurred_on.value = today();
 loadAuth().catch(error => {

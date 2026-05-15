@@ -103,7 +103,10 @@
           <form id="incident-form" class="form-grid panel">
             <label>
               Student
-              <input id="incident-student-search" name="student_search" list="incident-student-options" autocomplete="off" placeholder="Type at least 3 letters" required>
+              <input id="incident-student-search" name="student_search" list="incident-student-options" autocomplete="off" placeholder="Type at least 3 letters">
+              <select id="incident-student-select">
+                <option value="">Or choose from full list</option>
+              </select>
               <input type="hidden" name="student_id">
               <datalist id="incident-student-options"></datalist>
             </label>
