@@ -428,11 +428,10 @@ function prepareStatements() {
         WHEN 'success_contract' THEN 3
         WHEN 'parent_contact_contract' THEN 4
         WHEN 'device_restriction' THEN 5
-        WHEN 'email_teachers' THEN 6
-        WHEN 'reentry_check' THEN 7
-        WHEN 'return_chromebook' THEN 8
-        WHEN 'admin_review' THEN 9
-        WHEN 'parent_contact_admin' THEN 10
+        WHEN 'reentry_check' THEN 6
+        WHEN 'return_chromebook' THEN 7
+        WHEN 'admin_review' THEN 8
+        WHEN 'parent_contact_admin' THEN 9
         ELSE 99
       END,
       id
@@ -450,11 +449,10 @@ function prepareStatements() {
         WHEN 'success_contract' THEN 3
         WHEN 'parent_contact_contract' THEN 4
         WHEN 'device_restriction' THEN 5
-        WHEN 'email_teachers' THEN 6
-        WHEN 'reentry_check' THEN 7
-        WHEN 'return_chromebook' THEN 8
-        WHEN 'admin_review' THEN 9
-        WHEN 'parent_contact_admin' THEN 10
+        WHEN 'reentry_check' THEN 6
+        WHEN 'return_chromebook' THEN 7
+        WHEN 'admin_review' THEN 8
+        WHEN 'parent_contact_admin' THEN 9
         ELSE 99
       END,
       a.id
@@ -687,7 +685,6 @@ function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus
   if (currentStatus.key === "device_restriction") {
     const returnDate = addSchoolDays(occurredOn, 5);
     queueAction(studentId, incidentId, "device_restriction", "Start 5 school-day device restriction", returnDate, "Library/Tech", "Hold Chromebook except when a digital component is essential.");
-    queueAction(studentId, incidentId, "email_teachers", "Email Teachers", returnDate, "Library/Tech", "Notify classroom teachers about the temporary Chromebook restriction.");
     queueAction(studentId, incidentId, "reentry_check", "Schedule re-entry check", returnDate, "Teacher/Admin", "Confirm student can resume regular device access after the restriction.");
   }
 
@@ -785,23 +782,6 @@ async function notifyTeamOfViolation(studentId) {
       `A technology violation was entered for ${name}. Please review the dashboard.`,
       "",
       APP_BASE_URL
-    ].join("\n")
-  });
-}
-
-async function sendTeacherRestrictionEmail(action, teacherEmails, returnDate) {
-  const student = statements.getStudent.get(action.student_id);
-  if (!student) {
-    throw Object.assign(new Error("Student not found"), { status: 404 });
-  }
-  const name = studentDisplayName(student);
-  await sendEmail({
-    to: teacherEmails,
-    subject: `Chromebook restriction for ${name}`,
-    text: [
-      `Please be advised that ${name} has lost Chromebook privileges through ${returnDate}. ${name} may not use a device unless digital access is required for instruction. Please provide paper/pencil alternatives through ${returnDate}.`,
-      "",
-      `Student record: ${APP_BASE_URL}`
     ].join("\n")
   });
 }
@@ -1286,28 +1266,9 @@ async function handleApi(req, res, url) {
       statements.updateStudentAssetTag.run(assetTag, action.student_id);
       statements.updateActionDueDate.run(restrictionEndDate, actionId);
       if (action.incident_id) {
-        statements.updateActionDueDateByIncidentType.run(restrictionEndDate, action.incident_id, "email_teachers");
         statements.updateActionDueDateByIncidentType.run(restrictionEndDate, action.incident_id, "reentry_check");
       }
       notes = notes || `Asset tag: ${assetTag}; restriction through ${restrictionEndDate}`;
-    }
-
-    if (status === "complete" && action.action_type === "email_teachers") {
-      const teacherEmails = parseEmailList(body.teacher_emails);
-      const invalid = invalidEmails(teacherEmails);
-      if (!teacherEmails.length) {
-        return sendJson(res, 400, { error: "Teacher email addresses are required." });
-      }
-      if (invalid.length) {
-        return sendJson(res, 400, { error: `Check these email addresses: ${invalid.join(", ")}` });
-      }
-      const restrictionEndDate = optionalDate(body.return_date, "Restriction end date") || action.due_on;
-      if (!restrictionEndDate) {
-        return sendJson(res, 400, { error: "Restriction end date is required." });
-      }
-      await sendTeacherRestrictionEmail(action, teacherEmails, restrictionEndDate);
-      statements.updateActionDueDate.run(restrictionEndDate, actionId);
-      notes = notes || `Teacher email sent to ${teacherEmails.join(", ")}. Restriction through ${restrictionEndDate}.`;
     }
 
     if (status === "complete" && action.action_type === "reentry_check") {

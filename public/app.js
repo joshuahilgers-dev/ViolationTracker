@@ -40,6 +40,8 @@ const els = {
   statusGroups: document.querySelector("#status-groups"),
   incidentForm: document.querySelector("#incident-form"),
   incidentMessage: document.querySelector("#incident-message"),
+  incidentStudentSearch: document.querySelector("#incident-student-search"),
+  incidentStudentOptions: document.querySelector("#incident-student-options"),
   studentForm: document.querySelector("#student-form"),
   studentMessage: document.querySelector("#student-message"),
   csvImportForm: document.querySelector("#csv-import-form"),
@@ -237,15 +239,44 @@ function renderMetrics() {
 }
 
 function renderStudentOptions() {
-  const select = els.incidentForm.elements.student_id;
-  const previous = select.value;
-  select.innerHTML = [
-    `<option value="">Select student</option>`,
-    ...state.students.map(student => (
-      `<option value="${student.id}">${escapeHtml(student.last_name)}, ${escapeHtml(student.first_name)}${student.grade ? ` - Grade ${escapeHtml(student.grade)}` : ""}</option>`
-    ))
-  ].join("");
-  select.value = previous;
+  updateIncidentStudentOptions();
+}
+
+function studentOptionLabel(student) {
+  const parts = [
+    `${student.last_name}, ${student.first_name}`,
+    student.grade ? `Grade ${student.grade}` : "",
+    student.student_number ? `ID ${student.student_number}` : ""
+  ].filter(Boolean);
+  return parts.join(" - ");
+}
+
+function studentSearchText(student) {
+  return [
+    student.first_name,
+    student.last_name,
+    `${student.first_name} ${student.last_name}`,
+    `${student.last_name}, ${student.first_name}`,
+    student.student_number
+  ].join(" ").toLowerCase();
+}
+
+function matchingIncidentStudents(query) {
+  const normalized = query.trim().toLowerCase();
+  if (normalized.length < 3) return [];
+  return state.students
+    .filter(student => studentSearchText(student).includes(normalized))
+    .slice(0, 25);
+}
+
+function updateIncidentStudentOptions() {
+  const query = els.incidentStudentSearch.value;
+  const matches = matchingIncidentStudents(query);
+  els.incidentStudentOptions.innerHTML = matches.map(student => (
+    `<option value="${escapeHtml(studentOptionLabel(student))}"></option>`
+  )).join("");
+  const selected = state.students.find(student => studentOptionLabel(student) === query);
+  els.incidentForm.elements.student_id.value = selected ? selected.id : "";
 }
 
 function renderInfractionOptions() {
@@ -265,12 +296,17 @@ function renderDashboardActions() {
 }
 
 function renderStatusGroups() {
+  const todayText = today();
   els.statusGroups.innerHTML = statusOrder.map(key => {
     const students = state.students.filter(student => student.status.key === key);
+    const hasNew = students.some(student => student.last_incident_on === todayText);
     return `
       <button class="status-group status-group-button" type="button" data-status-key="${key}">
-        <h4><span class="badge ${key}">${statusLabels[key]}</span> ${students.length}</h4>
-        <div class="meta">${escapeHtml(students.length === 1 ? "1 student" : `${students.length} students`)}</div>
+        <h4>
+          <span class="badge ${key}">${statusLabels[key]}</span>
+          ${hasNew ? `<span class="new-badge">New</span>` : ""}
+        </h4>
+        <div class="status-count">${escapeHtml(students.length === 1 ? "1 student" : `${students.length} students`)}</div>
       </button>
     `;
   }).join("");
@@ -361,7 +397,7 @@ function actionCard(action) {
           <span>Upload Document</span>
           <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
         </label>
-        <button class="quiet-button" data-complete-action="${action.id}">${action.action_type === "email_teachers" ? "Send Email" : "Complete"}</button>
+        <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
       </div>
     </article>
   `;
@@ -391,20 +427,6 @@ function actionFields(action) {
         <label>
           Asset tag
           <input data-action-asset-tag="${action.id}" autocomplete="off" placeholder="Scan or enter asset tag" required>
-        </label>
-        <label>
-          Restriction through
-          <input type="date" data-action-return-date="${action.id}" value="${escapeHtml(action.due_on || "")}" required>
-        </label>
-      </div>
-    `;
-  }
-  if (action.action_type === "email_teachers") {
-    return `
-      <div class="action-fields wide">
-        <label>
-          Teacher email addresses
-          <textarea data-action-teacher-emails="${action.id}" rows="4" placeholder="one address per line, or separate with commas"></textarea>
         </label>
         <label>
           Restriction through
@@ -745,6 +767,12 @@ async function createIncident(event) {
   event.preventDefault();
   const formElement = event.currentTarget;
   const submitButton = formElement.querySelector("button[type='submit']");
+  updateIncidentStudentOptions();
+  if (!formElement.elements.student_id.value) {
+    els.incidentStudentSearch.focus();
+    els.incidentMessage.textContent = "Choose a student from the matching list.";
+    return;
+  }
   const form = new FormData(formElement);
   const payload = Object.fromEntries(form.entries());
   const originalText = submitButton.textContent;
@@ -757,6 +785,8 @@ async function createIncident(event) {
       body: JSON.stringify(payload)
     });
     formElement.reset();
+    els.incidentForm.elements.student_id.value = "";
+    updateIncidentStudentOptions();
     els.incidentForm.elements.occurred_on.value = today();
     populateReporterEmail();
     renderInfractionOptions();
@@ -775,11 +805,9 @@ async function completeAction(id) {
   const actionRow = document.querySelector(`[data-action-id="${id}"]`);
   const assetTagField = actionRow?.querySelector(`[data-action-asset-tag="${id}"]`);
   const returnDateField = actionRow?.querySelector(`[data-action-return-date="${id}"]`);
-  const teacherEmailsField = actionRow?.querySelector(`[data-action-teacher-emails="${id}"]`);
   const payload = { status: "complete" };
   if (assetTagField) payload.asset_tag = assetTagField.value.trim();
   if (returnDateField) payload.return_date = returnDateField.value;
-  if (teacherEmailsField) payload.teacher_emails = teacherEmailsField.value.trim();
   if (assetTagField && !payload.asset_tag) {
     assetTagField.focus();
     window.alert("Enter or scan the asset tag before completing this follow-up.");
@@ -788,11 +816,6 @@ async function completeAction(id) {
   if (returnDateField && !payload.return_date) {
     returnDateField.focus();
     window.alert("Choose the Chromebook return date before completing this follow-up.");
-    return;
-  }
-  if (teacherEmailsField && !payload.teacher_emails) {
-    teacherEmailsField.focus();
-    window.alert("Enter at least one teacher email address before sending.");
     return;
   }
 
@@ -1047,6 +1070,8 @@ els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();
 });
+els.incidentStudentSearch.addEventListener("input", updateIncidentStudentOptions);
+els.incidentStudentSearch.addEventListener("change", updateIncidentStudentOptions);
 
 els.incidentForm.elements.occurred_on.value = today();
 loadAuth().catch(error => {

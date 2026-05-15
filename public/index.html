@@ -103,7 +103,9 @@
           <form id="incident-form" class="form-grid panel">
             <label>
               Student
-              <select name="student_id" required></select>
+              <input id="incident-student-search" name="student_search" list="incident-student-options" autocomplete="off" placeholder="Type at least 3 letters" required>
+              <input type="hidden" name="student_id">
+              <datalist id="incident-student-options"></datalist>
             </label>
             <label>
               Date
@@ -115,7 +117,23 @@
             </label>
             <label>
               Class period
-              <input name="class_period">
+              <select name="class_period">
+                <option value="">Select class period</option>
+                <option value="RPT">RPT</option>
+                <option value="1st hour">1st hour</option>
+                <option value="2nd hour">2nd hour</option>
+                <option value="3rd hour">3rd hour</option>
+                <option value="4th hour">4th hour</option>
+                <option value="5th hour">5th hour</option>
+                <option value="6th hour">6th hour</option>
+                <option value="7th hour">7th hour</option>
+                <option value="8th hour">8th hour</option>
+                <option value="Before school">Before school</option>
+                <option value="After school">After school</option>
+                <option value="Lunch">Lunch</option>
+                <option value="N/A">N/A</option>
+                <option value="Off-site">Off-site</option>
+              </select>
             </label>
             <fieldset class="segmented-field">
               <legend>Severity</legend>
