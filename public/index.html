@@ -253,6 +253,21 @@
                 <li>Fourth total violation: five school-day Chromebook restriction.</li>
                 <li>Fifth or later violation: Chromebook to admin for next steps.</li>
               </ol>
+              <div class="settings-block">
+                <h4>Team Notifications</h4>
+                <p class="panel-note">These addresses receive a simple alert whenever a violation is entered.</p>
+                <form id="notification-form" class="stacked-form">
+                  <label>
+                    Email addresses
+                    <textarea name="team_emails" rows="4" placeholder="one address per line"></textarea>
+                  </label>
+                  <div class="form-actions">
+                    <button type="submit" class="primary-button">Save recipients</button>
+                    <span id="notification-message" role="status"></span>
+                  </div>
+                </form>
+                <div class="meta" id="notification-status"></div>
+              </div>
             </section>
             <section class="panel">
               <h3>Violation Types</h3>

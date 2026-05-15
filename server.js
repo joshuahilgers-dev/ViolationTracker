@@ -6,12 +6,14 @@ const { URL } = require("node:url");
 require("dotenv").config();
 const { OAuth2Client } = require("google-auth-library");
 const initSqlJs = require("sql.js");
+const nodemailer = require("nodemailer");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const TEMPLATE_DIR = path.join(DATA_DIR, "templates");
+const DOCUMENT_DIR = path.join(DATA_DIR, "documents");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
@@ -25,10 +27,20 @@ const SESSION_HOURS = Number(process.env.SESSION_HOURS || 8);
 const SESSION_COOKIE = "tvt_session";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const CURRENT_TERM_SETTING = "current_term_id";
+const TEAM_NOTIFICATION_EMAILS_SETTING = "team_notification_emails";
+const APP_BASE_URL = (process.env.APP_BASE_URL || "http://vtrack.wrps.org:4173").replace(/\/$/, "");
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE = process.env.SMTP_SECURE === "1" || process.env.SMTP_SECURE === "true";
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const EMAIL_FROM = process.env.EMAIL_FROM || SMTP_USER || `Technology Violation Tracker <no-reply@${ALLOWED_EMAIL_DOMAIN}>`;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+let mailTransporter;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
+fs.mkdirSync(DOCUMENT_DIR, { recursive: true });
 
 let db;
 let statements;
@@ -278,6 +290,21 @@ function migrate() {
       uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS student_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      action_id INTEGER REFERENCES actions(id) ON DELETE SET NULL,
+      incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL,
+      term_id INTEGER,
+      action_type TEXT,
+      title TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      uploaded_by TEXT,
+      uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -400,10 +427,11 @@ function prepareStatements() {
         WHEN 'success_contract' THEN 3
         WHEN 'parent_contact_contract' THEN 4
         WHEN 'device_restriction' THEN 5
-        WHEN 'reentry_check' THEN 6
-        WHEN 'return_chromebook' THEN 7
-        WHEN 'admin_review' THEN 8
-        WHEN 'parent_contact_admin' THEN 9
+        WHEN 'email_teachers' THEN 6
+        WHEN 'reentry_check' THEN 7
+        WHEN 'return_chromebook' THEN 8
+        WHEN 'admin_review' THEN 9
+        WHEN 'parent_contact_admin' THEN 10
         ELSE 99
       END,
       id
@@ -421,10 +449,11 @@ function prepareStatements() {
         WHEN 'success_contract' THEN 3
         WHEN 'parent_contact_contract' THEN 4
         WHEN 'device_restriction' THEN 5
-        WHEN 'reentry_check' THEN 6
-        WHEN 'return_chromebook' THEN 7
-        WHEN 'admin_review' THEN 8
-        WHEN 'parent_contact_admin' THEN 9
+        WHEN 'email_teachers' THEN 6
+        WHEN 'reentry_check' THEN 7
+        WHEN 'return_chromebook' THEN 8
+        WHEN 'admin_review' THEN 9
+        WHEN 'parent_contact_admin' THEN 10
         ELSE 99
       END,
       a.id
@@ -437,6 +466,11 @@ function prepareStatements() {
   `),
   updateActionDueDate: prepare(`
     UPDATE actions SET due_on = ? WHERE id = ?
+  `),
+  updateActionDueDateByIncidentType: prepare(`
+    UPDATE actions
+    SET due_on = ?
+    WHERE incident_id = ? AND action_type = ?
   `),
   insertAction: prepare(`
     INSERT OR IGNORE INTO actions (student_id, incident_id, action_type, title, due_on, owner, notes)
@@ -469,6 +503,9 @@ function prepareStatements() {
   setSetting: prepare(`
     INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)
   `),
+  getSetting: prepare(`
+    SELECT value FROM app_settings WHERE key = ?
+  `),
   archiveOpenActions: prepare(`
     UPDATE actions
     SET status = 'complete',
@@ -494,6 +531,32 @@ function prepareStatements() {
   `),
   deleteTemplate: prepare(`
     DELETE FROM action_templates WHERE action_type = ?
+  `),
+  listDocumentsForStudent: prepare(`
+    SELECT d.*, a.title AS action_title, terms.name AS term_name
+    FROM student_documents d
+    LEFT JOIN actions a ON a.id = d.action_id
+    LEFT JOIN terms ON terms.id = d.term_id
+    WHERE d.student_id = ?
+    ORDER BY d.uploaded_at DESC, d.id DESC
+  `),
+  getDocument: prepare(`
+    SELECT * FROM student_documents WHERE id = ?
+  `),
+  insertDocument: prepare(`
+    INSERT INTO student_documents (
+      student_id,
+      action_id,
+      incident_id,
+      term_id,
+      action_type,
+      title,
+      original_name,
+      stored_name,
+      mime_type,
+      uploaded_by
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
 };
 }
@@ -623,6 +686,7 @@ function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus
   if (currentStatus.key === "device_restriction") {
     const returnDate = addSchoolDays(occurredOn, 5);
     queueAction(studentId, incidentId, "device_restriction", "Start 5 school-day device restriction", returnDate, "Library/Tech", "Hold Chromebook except when a digital component is essential.");
+    queueAction(studentId, incidentId, "email_teachers", "Email Teachers", returnDate, "Library/Tech", "Notify classroom teachers about the temporary Chromebook restriction.");
     queueAction(studentId, incidentId, "reentry_check", "Schedule re-entry check", returnDate, "Teacher/Admin", "Confirm student can resume regular device access after the restriction.");
   }
 
@@ -636,6 +700,105 @@ function queueAction(studentId, incidentId, actionType, title, dueOn, owner, not
   statements.insertAction.run(studentId, incidentId, actionType, title, dueOn, owner, notes);
 }
 
+function parseEmailList(value) {
+  return String(value || "")
+    .split(/[\s,;]+/)
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((email, index, list) => list.indexOf(email) === index);
+}
+
+function invalidEmails(emails) {
+  return emails.filter(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+}
+
+function getTeamNotificationEmails() {
+  const setting = statements.getSetting.get(TEAM_NOTIFICATION_EMAILS_SETTING);
+  if (!setting?.value) return [];
+  try {
+    const parsed = JSON.parse(setting.value);
+    return Array.isArray(parsed) ? parsed : parseEmailList(setting.value);
+  } catch {
+    return parseEmailList(setting.value);
+  }
+}
+
+function setTeamNotificationEmails(emails) {
+  statements.setSetting.run(TEAM_NOTIFICATION_EMAILS_SETTING, JSON.stringify(emails));
+}
+
+function mailIsConfigured() {
+  return Boolean(SMTP_HOST && EMAIL_FROM);
+}
+
+function mailer() {
+  if (!mailIsConfigured()) {
+    throw Object.assign(new Error("Email is not configured on the server."), { status: 503 });
+  }
+  if (!mailTransporter) {
+    const config = {
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_SECURE
+    };
+    if (SMTP_USER || SMTP_PASS) {
+      config.auth = { user: SMTP_USER, pass: SMTP_PASS };
+    }
+    mailTransporter = nodemailer.createTransport(config);
+  }
+  return mailTransporter;
+}
+
+async function sendEmail({ to, subject, text }) {
+  const recipients = Array.isArray(to) ? to : parseEmailList(to);
+  if (!recipients.length) return { skipped: true };
+  await mailer().sendMail({
+    from: EMAIL_FROM,
+    to: recipients.join(", "),
+    subject,
+    text
+  });
+  return { sent: true, recipients };
+}
+
+function studentDisplayName(student) {
+  return `${student.first_name} ${student.last_name}`.trim();
+}
+
+async function notifyTeamOfViolation(studentId) {
+  const recipients = getTeamNotificationEmails();
+  if (!recipients.length || !mailIsConfigured()) return;
+  const student = statements.getStudent.get(studentId);
+  if (!student) return;
+  const name = studentDisplayName(student);
+  await sendEmail({
+    to: recipients,
+    subject: `Technology violation entered for ${name}`,
+    text: [
+      `A technology violation was entered for ${name}. Please review the dashboard.`,
+      "",
+      APP_BASE_URL
+    ].join("\n")
+  });
+}
+
+async function sendTeacherRestrictionEmail(action, teacherEmails, returnDate) {
+  const student = statements.getStudent.get(action.student_id);
+  if (!student) {
+    throw Object.assign(new Error("Student not found"), { status: 404 });
+  }
+  const name = studentDisplayName(student);
+  await sendEmail({
+    to: teacherEmails,
+    subject: `Chromebook restriction for ${name}`,
+    text: [
+      `Please be advised that ${name} has lost Chromebook privileges through ${returnDate}. ${name} may not use a device unless digital access is required for instruction. Please provide paper/pencil alternatives through ${returnDate}.`,
+      "",
+      `Student record: ${APP_BASE_URL}`
+    ].join("\n")
+  });
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -643,6 +806,30 @@ function sendJson(res, status, body) {
     "cache-control": "no-store"
   });
   res.end(payload);
+}
+
+function documentUrl(document) {
+  if (!document) return null;
+  return `/documents/${document.id}/file`;
+}
+
+function documentView(document) {
+  return {
+    id: document.id,
+    student_id: document.student_id,
+    action_id: document.action_id,
+    incident_id: document.incident_id,
+    term_id: document.term_id,
+    term_name: document.term_name,
+    action_type: document.action_type,
+    title: document.title,
+    action_title: document.action_title,
+    original_name: document.original_name,
+    mime_type: document.mime_type,
+    uploaded_by: document.uploaded_by,
+    uploaded_at: document.uploaded_at,
+    url: documentUrl(document)
+  };
 }
 
 function sendFile(res, filePath, mimeType) {
@@ -747,7 +934,7 @@ function readBody(req) {
     let body = "";
     req.on("data", chunk => {
       body += chunk;
-      if (body.length > 8_000_000) {
+      if (body.length > 16_000_000) {
         reject(new Error("Request body too large"));
         req.destroy();
       }
@@ -804,6 +991,11 @@ function templateView(template) {
 function safeTemplateFileName(actionType, originalName) {
   const ext = path.extname(originalName || "").toLowerCase().replace(/[^a-z0-9.]/g, "") || ".pdf";
   return `${actionType}-${Date.now()}${ext}`;
+}
+
+function safeDocumentFileName(actionId, originalName) {
+  const ext = path.extname(originalName || "").toLowerCase().replace(/[^a-z0-9.]/g, "") || ".pdf";
+  return `action-${actionId}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
 }
 
 function createOrUpdateStudent(row) {
@@ -896,6 +1088,13 @@ async function handleApi(req, res, url) {
     return sendFile(res, path.join(TEMPLATE_DIR, template.stored_name), template.mime_type);
   }
 
+  const documentFileMatch = url.pathname.match(/^\/documents\/(\d+)\/file$/);
+  if (req.method === "GET" && documentFileMatch) {
+    const document = statements.getDocument.get(Number(documentFileMatch[1]));
+    if (!document) return sendJson(res, 404, { error: "Document not found" });
+    return sendFile(res, path.join(DOCUMENT_DIR, document.stored_name), document.mime_type);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const search = "";
     const term = currentTerm();
@@ -903,6 +1102,11 @@ async function handleApi(req, res, url) {
     const templates = statements.listTemplates.all().map(templateView);
     return sendJson(res, 200, {
       currentTerm: term,
+      notificationSettings: {
+        teamEmails: getTeamNotificationEmails(),
+        emailConfigured: mailIsConfigured(),
+        appBaseUrl: APP_BASE_URL
+      },
       students,
       infractionTypes: statements.listInfractions.all(),
       templates,
@@ -917,6 +1121,30 @@ async function handleApi(req, res, url) {
     const search = (url.searchParams.get("q") || "").trim().toLowerCase();
     const like = `%${search}%`;
     return sendJson(res, 200, statements.listStudents.all(currentTerm().id, search, like).map(toStudentView));
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/settings/notifications") {
+    return sendJson(res, 200, {
+      teamEmails: getTeamNotificationEmails(),
+      emailConfigured: mailIsConfigured(),
+      appBaseUrl: APP_BASE_URL
+    });
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/settings/notifications") {
+    const body = await readBody(req);
+    const emails = parseEmailList(Array.isArray(body.teamEmails) ? body.teamEmails.join(",") : body.teamEmails);
+    const invalid = invalidEmails(emails);
+    if (invalid.length) {
+      return sendJson(res, 400, { error: `Check these email addresses: ${invalid.join(", ")}` });
+    }
+    setTeamNotificationEmails(emails);
+    statements.addAudit.run("settings", 0, "Team notification email list was updated.");
+    return sendJson(res, 200, {
+      teamEmails: emails,
+      emailConfigured: mailIsConfigured(),
+      appBaseUrl: APP_BASE_URL
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/api/students") {
@@ -973,7 +1201,8 @@ async function handleApi(req, res, url) {
       incidents,
       currentIncidents,
       previousIncidents,
-      actions: statements.actionsForStudent.all(id)
+      actions: statements.actionsForStudent.all(id),
+      documents: statements.listDocumentsForStudent.all(id).map(documentView)
     });
   }
 
@@ -1010,6 +1239,9 @@ async function handleApi(req, res, url) {
     const currentStatus = statusForStudent(studentId);
     ensureWorkflowActions(studentId, Number(result.lastInsertRowid), occurredOn, previousStatus, currentStatus);
     statements.addAudit.run("incident", result.lastInsertRowid, `${severity} violation entered.`);
+    notifyTeamOfViolation(studentId).catch(error => {
+      statements.addAudit.run("email", result.lastInsertRowid, `Team notification email failed: ${error.message}`);
+    });
     return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
   }
 
@@ -1040,8 +1272,35 @@ async function handleApi(req, res, url) {
 
     if (status === "complete" && action.action_type === "device_restriction") {
       const assetTag = required(body.asset_tag, "Asset tag");
+      const restrictionEndDate = optionalDate(body.return_date, "Restriction end date");
+      if (!restrictionEndDate) {
+        return sendJson(res, 400, { error: "Restriction end date is required." });
+      }
       statements.updateStudentAssetTag.run(assetTag, action.student_id);
-      notes = notes || `Asset tag: ${assetTag}`;
+      statements.updateActionDueDate.run(restrictionEndDate, actionId);
+      if (action.incident_id) {
+        statements.updateActionDueDateByIncidentType.run(restrictionEndDate, action.incident_id, "email_teachers");
+        statements.updateActionDueDateByIncidentType.run(restrictionEndDate, action.incident_id, "reentry_check");
+      }
+      notes = notes || `Asset tag: ${assetTag}; restriction through ${restrictionEndDate}`;
+    }
+
+    if (status === "complete" && action.action_type === "email_teachers") {
+      const teacherEmails = parseEmailList(body.teacher_emails);
+      const invalid = invalidEmails(teacherEmails);
+      if (!teacherEmails.length) {
+        return sendJson(res, 400, { error: "Teacher email addresses are required." });
+      }
+      if (invalid.length) {
+        return sendJson(res, 400, { error: `Check these email addresses: ${invalid.join(", ")}` });
+      }
+      const restrictionEndDate = optionalDate(body.return_date, "Restriction end date") || action.due_on;
+      if (!restrictionEndDate) {
+        return sendJson(res, 400, { error: "Restriction end date is required." });
+      }
+      await sendTeacherRestrictionEmail(action, teacherEmails, restrictionEndDate);
+      statements.updateActionDueDate.run(restrictionEndDate, actionId);
+      notes = notes || `Teacher email sent to ${teacherEmails.join(", ")}. Restriction through ${restrictionEndDate}.`;
     }
 
     if (status === "complete" && action.action_type === "reentry_check") {
@@ -1064,6 +1323,40 @@ async function handleApi(req, res, url) {
 
     statements.completeAction.run(status, completedOn, notes, actionId);
     return sendJson(res, 200, { ok: true });
+  }
+
+  const actionDocumentMatch = url.pathname.match(/^\/api\/actions\/(\d+)\/documents$/);
+  if (req.method === "POST" && actionDocumentMatch) {
+    const session = requireAuth(req);
+    const actionId = Number(actionDocumentMatch[1]);
+    const action = statements.getAction.get(actionId);
+    if (!action) return sendJson(res, 404, { error: "Follow-up not found" });
+    const body = await readBody(req);
+    const originalName = required(body.original_name, "File name");
+    const mimeType = nullable(body.mime_type) || "application/octet-stream";
+    const base64 = required(body.content_base64, "File content");
+    const storedName = safeDocumentFileName(actionId, originalName);
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.length > 10_000_000) {
+      return sendJson(res, 400, { error: "Document must be 10 MB or smaller." });
+    }
+    fs.writeFileSync(path.join(DOCUMENT_DIR, storedName), bytes);
+    const title = nullable(body.title) || action.title;
+    const result = statements.insertDocument.run(
+      action.student_id,
+      action.id,
+      action.incident_id,
+      currentTerm().id,
+      action.action_type,
+      title,
+      originalName,
+      storedName,
+      mimeType,
+      session.email || session.name || null
+    );
+    statements.addAudit.run("document", Number(result.lastInsertRowid), `${originalName} was uploaded.`);
+    const document = statements.getDocument.get(Number(result.lastInsertRowid));
+    return sendJson(res, 201, documentView(document));
   }
 
   if (req.method === "GET" && url.pathname === "/api/templates") {
@@ -1144,7 +1437,7 @@ function serveStatic(req, res, url) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
-    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/templates/")) {
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/templates/") || url.pathname.startsWith("/documents/")) {
       await handleApi(req, res, url);
     } else {
       serveStatic(req, res, url);

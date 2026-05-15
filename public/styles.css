@@ -252,12 +252,19 @@ button {
 
 .primary-button,
 .quiet-button,
-.danger-button {
+.danger-button,
+.upload-button,
+.quiet-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 40px;
   border-radius: 8px;
   border: 1px solid transparent;
   padding: 0 14px;
   font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .primary-button {
@@ -273,6 +280,21 @@ button {
   background: #f8fafc;
   border-color: var(--line);
   color: var(--text);
+}
+
+.upload-button,
+.quiet-link-button {
+  background: #f8fafc;
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.upload-button input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .danger-button {
@@ -601,6 +623,27 @@ textarea {
   margin-top: 12px;
 }
 
+.action-fields.wide {
+  max-width: 460px;
+}
+
+.document-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.document-list a {
+  color: var(--accent-dark);
+  font-weight: 650;
+}
+
+.document-library {
+  display: grid;
+  gap: 10px;
+}
+
 .history-details {
   margin-top: 18px;
 }
@@ -627,6 +670,22 @@ textarea {
 
 .rules li + li {
   margin-top: 9px;
+}
+
+.settings-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-block h4 {
+  margin: 0 0 6px;
+}
+
+.stacked-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .type-group h4 {

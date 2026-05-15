@@ -2,6 +2,7 @@ const state = {
   authConfig: null,
   currentUser: null,
   currentTerm: null,
+  notificationSettings: null,
   students: [],
   infractionTypes: [],
   templates: [],
@@ -60,7 +61,10 @@ const els = {
   infractionSettings: document.querySelector("#infraction-settings"),
   currentTermLabel: document.querySelector("#current-term-label"),
   termMessage: document.querySelector("#term-message"),
-  startTermButton: document.querySelector("#start-term-button")
+  startTermButton: document.querySelector("#start-term-button"),
+  notificationForm: document.querySelector("#notification-form"),
+  notificationMessage: document.querySelector("#notification-message"),
+  notificationStatus: document.querySelector("#notification-status")
 };
 
 function today() {
@@ -169,6 +173,7 @@ async function handleGoogleCredential(response) {
 async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.currentTerm = data.currentTerm;
+  state.notificationSettings = data.notificationSettings;
   state.students = data.students;
   state.infractionTypes = data.infractionTypes;
   state.templates = data.templates || [];
@@ -195,6 +200,7 @@ function renderAll() {
   renderTemplates();
   renderInfractionSettings();
   renderTermSettings();
+  renderNotificationSettings();
 }
 
 function renderTermSettings() {
@@ -203,6 +209,15 @@ function renderTermSettings() {
   els.currentTermLabel.textContent = term
     ? `Current term: ${term.name} (started ${term.started_on})`
     : "Current term is not set.";
+}
+
+function renderNotificationSettings() {
+  if (!els.notificationForm || !state.notificationSettings) return;
+  const emails = state.notificationSettings.teamEmails || [];
+  els.notificationForm.elements.team_emails.value = emails.join("\n");
+  els.notificationStatus.textContent = state.notificationSettings.emailConfigured
+    ? `Email is configured. Dashboard link: ${state.notificationSettings.appBaseUrl}`
+    : "Email is not configured on the server yet. Save recipients now; messages will send after SMTP is added.";
 }
 
 function switchView(name) {
@@ -338,12 +353,34 @@ function actionCard(action) {
         </div>
         ${action.notes ? `<div class="meta">${escapeHtml(action.notes)}</div>` : ""}
         ${actionFields(action)}
+        ${action.documents?.length ? documentList(action.documents) : ""}
       </div>
       <div class="row-actions">
         ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
-        <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
+        <label class="upload-button">
+          <span>Upload Document</span>
+          <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+        </label>
+        <button class="quiet-button" data-complete-action="${action.id}">${action.action_type === "email_teachers" ? "Send Email" : "Complete"}</button>
       </div>
     </article>
+  `;
+}
+
+function attachActionDocuments(actions, documents) {
+  return actions.map(action => ({
+    ...action,
+    documents: documents.filter(document => Number(document.action_id) === Number(action.id))
+  }));
+}
+
+function documentList(documents) {
+  return `
+    <div class="document-list">
+      ${documents.map(document => `
+        <a href="${escapeHtml(document.url)}" target="_blank" rel="noopener">${escapeHtml(document.original_name)}</a>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -354,6 +391,24 @@ function actionFields(action) {
         <label>
           Asset tag
           <input data-action-asset-tag="${action.id}" autocomplete="off" placeholder="Scan or enter asset tag" required>
+        </label>
+        <label>
+          Restriction through
+          <input type="date" data-action-return-date="${action.id}" value="${escapeHtml(action.due_on || "")}" required>
+        </label>
+      </div>
+    `;
+  }
+  if (action.action_type === "email_teachers") {
+    return `
+      <div class="action-fields wide">
+        <label>
+          Teacher email addresses
+          <textarea data-action-teacher-emails="${action.id}" rows="4" placeholder="one address per line, or separate with commas"></textarea>
+        </label>
+        <label>
+          Restriction through
+          <input type="date" data-action-return-date="${action.id}" value="${escapeHtml(action.due_on || "")}" required>
         </label>
       </div>
     `;
@@ -454,10 +509,27 @@ function incidentRows(incidents) {
   `).join("") : `<div class="empty">No violations recorded.</div>`;
 }
 
+function profileDocumentCard(document) {
+  return `
+    <article class="list-row">
+      <div>
+        <h4>${escapeHtml(document.original_name)}</h4>
+        <div class="meta">
+          <span>${escapeHtml(document.title || document.action_title || "Student document")}</span>
+          ${document.term_name ? `<span>${escapeHtml(document.term_name)}</span>` : ""}
+          <span>Uploaded ${escapeHtml(String(document.uploaded_at || "").slice(0, 10))}</span>
+        </div>
+      </div>
+      <a class="quiet-link-button" href="${escapeHtml(document.url)}" target="_blank" rel="noopener">Open</a>
+    </article>
+  `;
+}
+
 async function showFollowups(studentId) {
   const student = await api(`/api/students/${studentId}`);
   state.selectedFollowupStudentId = studentId;
-  const openActions = student.actions.filter(action => action.status === "open");
+  const actionsWithDocuments = attachActionDocuments(student.actions, student.documents || []);
+  const openActions = actionsWithDocuments.filter(action => action.status === "open");
   els.followupsTitle.textContent = `${student.first_name} ${student.last_name}`;
   els.followupsSubtitle.textContent = openActions.length === 1 ? "1 open follow-up needs attention." : `${openActions.length} open follow-ups need attention.`;
   els.followupsDetail.innerHTML = `
@@ -484,7 +556,9 @@ async function showFollowups(studentId) {
 async function showStudentDetail(id) {
   const student = await api(`/api/students/${id}`);
   state.selectedStudentId = id;
-  const openActions = student.actions.filter(action => action.status === "open");
+  const documents = student.documents || [];
+  const actionsWithDocuments = attachActionDocuments(student.actions, documents);
+  const openActions = actionsWithDocuments.filter(action => action.status === "open");
   const currentIncidents = student.currentIncidents || student.incidents || [];
   const previousIncidents = student.previousIncidents || [];
   els.studentDetail.hidden = false;
@@ -525,6 +599,10 @@ async function showStudentDetail(id) {
         ${incidentRows(previousIncidents)}
       </div>
     </details>
+    <h4 class="section-title">Stored Documents</h4>
+    <div class="document-library">
+      ${documents.length ? documents.map(profileDocumentCard).join("") : `<div class="empty">No documents uploaded.</div>`}
+    </div>
   `;
   els.studentDetail.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -697,9 +775,11 @@ async function completeAction(id) {
   const actionRow = document.querySelector(`[data-action-id="${id}"]`);
   const assetTagField = actionRow?.querySelector(`[data-action-asset-tag="${id}"]`);
   const returnDateField = actionRow?.querySelector(`[data-action-return-date="${id}"]`);
+  const teacherEmailsField = actionRow?.querySelector(`[data-action-teacher-emails="${id}"]`);
   const payload = { status: "complete" };
   if (assetTagField) payload.asset_tag = assetTagField.value.trim();
   if (returnDateField) payload.return_date = returnDateField.value;
+  if (teacherEmailsField) payload.teacher_emails = teacherEmailsField.value.trim();
   if (assetTagField && !payload.asset_tag) {
     assetTagField.focus();
     window.alert("Enter or scan the asset tag before completing this follow-up.");
@@ -710,14 +790,23 @@ async function completeAction(id) {
     window.alert("Choose the Chromebook return date before completing this follow-up.");
     return;
   }
+  if (teacherEmailsField && !payload.teacher_emails) {
+    teacherEmailsField.focus();
+    window.alert("Enter at least one teacher email address before sending.");
+    return;
+  }
 
-  await api(`/api/actions/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload)
-  });
-  await loadBootstrap();
-  if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
-  if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  try {
+    await api(`/api/actions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    window.alert(error.message);
+  }
 }
 
 function printTemplate(url) {
@@ -768,6 +857,30 @@ async function uploadTemplate(event) {
   } finally {
     submitButton.disabled = false;
     submitButton.textContent = originalText;
+  }
+}
+
+async function uploadActionDocument(actionId, file) {
+  if (!file) return;
+  const actionRow = document.querySelector(`[data-action-id="${actionId}"]`);
+  const label = actionRow?.querySelector(".upload-button span");
+  const originalText = label?.textContent || "Upload Document";
+  if (label) label.textContent = "Uploading...";
+  try {
+    await api(`/api/actions/${actionId}/documents`, {
+      method: "POST",
+      body: JSON.stringify({
+        original_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    if (label) label.textContent = originalText;
   }
 }
 
@@ -842,6 +955,32 @@ async function startNewTerm() {
   }
 }
 
+async function saveNotificationSettings(event) {
+  event.preventDefault();
+  const submitButton = event.currentTarget.querySelector("button[type='submit']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Saving...";
+  els.notificationMessage.textContent = "Saving...";
+  try {
+    const result = await api("/api/settings/notifications", {
+      method: "PUT",
+      body: JSON.stringify({
+        teamEmails: event.currentTarget.elements.team_emails.value
+      })
+    });
+    state.notificationSettings = result;
+    renderNotificationSettings();
+    els.notificationMessage.textContent = "Recipients saved.";
+    setTimeout(() => { els.notificationMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.notificationMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
 async function logout() {
   await api("/api/auth/logout", {
     method: "POST",
@@ -888,12 +1027,21 @@ document.addEventListener("click", event => {
   }
 });
 
+document.addEventListener("change", event => {
+  const documentInput = event.target.closest("[data-document-file]");
+  if (documentInput) {
+    uploadActionDocument(Number(documentInput.dataset.documentFile), documentInput.files[0]);
+    documentInput.value = "";
+  }
+});
+
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
 els.csvImportForm.addEventListener("submit", importCsv);
 els.studentSearch.addEventListener("input", renderStudents);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.startTermButton.addEventListener("click", startNewTerm);
+els.notificationForm.addEventListener("submit", saveNotificationSettings);
 els.templateForm.addEventListener("submit", uploadTemplate);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
