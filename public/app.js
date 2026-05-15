@@ -756,9 +756,11 @@ function studentFieldForHeader(header) {
   const key = normalizeHeader(header);
   const map = {
     firstname: "first_name",
+    namefirst: "first_name",
     first: "first_name",
     fname: "first_name",
     lastname: "last_name",
+    namelast: "last_name",
     last: "last_name",
     lname: "last_name",
     studentid: "student_number",
@@ -766,6 +768,7 @@ function studentFieldForHeader(header) {
     id: "student_number",
     number: "student_number",
     grade: "grade",
+    gradecurrentyear: "grade",
     team: "team",
     parent: "guardian_name",
     guardian: "guardian_name",
