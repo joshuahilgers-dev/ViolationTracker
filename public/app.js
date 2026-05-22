@@ -697,8 +697,12 @@ async function showFollowups(studentId) {
             <span>${escapeHtml(student.status.label)}</span>
           </div>
         </div>
-        <button class="quiet-button" data-student-id="${student.id}">Open student record</button>
+        <div class="row-actions">
+          <button class="quiet-button" data-toggle-step-adjust="${student.id}">Adjust Current Step</button>
+          <button class="quiet-button" data-student-id="${student.id}">Open student record</button>
+        </div>
       </div>
+      ${stepAdjustmentForm(student)}
       <div class="timeline">
         ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
       </div>
@@ -730,11 +734,9 @@ async function showStudentDetail(id) {
       </div>
       <div class="detail-actions">
         <span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>
-        <button class="quiet-button" data-toggle-step-adjust="${student.id}">Adjust Current Step</button>
         <button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>
       </div>
     </div>
-    ${stepAdjustmentForm(student)}
     <div class="detail-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
@@ -1011,7 +1013,11 @@ async function submitStepAdjustment(form) {
       body: JSON.stringify(payload)
     });
     await loadBootstrap();
-    await showStudentDetail(studentId);
+    if (state.selectedFollowupStudentId === studentId) {
+      await showFollowups(studentId);
+    } else {
+      await showStudentDetail(studentId);
+    }
   } catch (error) {
     status.textContent = error.message;
   } finally {
