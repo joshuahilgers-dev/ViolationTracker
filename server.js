@@ -256,6 +256,9 @@ function migrate() {
       severity TEXT NOT NULL CHECK (severity IN ('minor', 'major')),
       infraction_type_id INTEGER REFERENCES infraction_types(id),
       notes TEXT,
+      canceled_at TEXT,
+      canceled_by TEXT,
+      canceled_reason TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -320,6 +323,9 @@ function migrate() {
   `, true);
 
   ensureColumn("incidents", "term_id", "INTEGER");
+  ensureColumn("incidents", "canceled_at", "TEXT");
+  ensureColumn("incidents", "canceled_by", "TEXT");
+  ensureColumn("incidents", "canceled_reason", "TEXT");
   ensureCurrentTerm();
   syncInfractionTypes();
 }
@@ -354,7 +360,7 @@ function prepareStatements() {
       MAX(i.id) AS last_incident_id,
       MAX(i.occurred_on) AS last_incident_on
     FROM students s
-    LEFT JOIN incidents i ON i.student_id = s.id AND i.term_id = ?
+    LEFT JOIN incidents i ON i.student_id = s.id AND i.term_id = ? AND i.canceled_at IS NULL
     WHERE s.active = 1
       AND (? = '' OR LOWER(s.first_name || ' ' || s.last_name || ' ' || COALESCE(s.student_number, '')) LIKE ?)
     GROUP BY s.id
@@ -413,7 +419,7 @@ function prepareStatements() {
   incidentsForStatus: prepare(`
     SELECT id, severity, occurred_on
     FROM incidents
-    WHERE student_id = ? AND term_id = ?
+    WHERE student_id = ? AND term_id = ? AND canceled_at IS NULL
     ORDER BY occurred_on, id
   `),
   actionsForStudent: prepare(`
@@ -441,7 +447,9 @@ function prepareStatements() {
     SELECT a.*, s.first_name, s.last_name, s.grade
     FROM actions a
     JOIN students s ON s.id = a.student_id
+    LEFT JOIN incidents i ON i.id = a.incident_id
     WHERE a.status = 'open' AND s.active = 1
+      AND (a.incident_id IS NULL OR i.canceled_at IS NULL)
       AND (a.action_type != 'return_chromebook' OR a.due_on IS NULL OR a.due_on <= date('now', 'localtime'))
     ORDER BY a.due_on IS NULL,
       a.due_on,
@@ -460,6 +468,24 @@ function prepareStatements() {
       a.id
   `),
   getAction: prepare("SELECT * FROM actions WHERE id = ?"),
+  getIncident: prepare("SELECT * FROM incidents WHERE id = ?"),
+  cancelIncident: prepare(`
+    UPDATE incidents
+    SET canceled_at = CURRENT_TIMESTAMP,
+        canceled_by = ?,
+        canceled_reason = ?
+    WHERE id = ?
+  `),
+  closeOpenActionsForIncident: prepare(`
+    UPDATE actions
+    SET status = 'complete',
+        completed_on = ?,
+        notes = CASE
+          WHEN notes IS NULL OR notes = '' THEN ?
+          ELSE notes || ' ' || ?
+        END
+    WHERE incident_id = ? AND status = 'open'
+  `),
   nextReturnActionForStudent: prepare(`
     SELECT *
     FROM actions
@@ -499,7 +525,7 @@ function prepareStatements() {
       SUM(CASE WHEN severity = 'major' THEN 1 ELSE 0 END) AS major_count,
       MAX(occurred_on) AS last_incident_on
     FROM incidents
-    WHERE student_id = ? AND term_id = ?
+    WHERE student_id = ? AND term_id = ? AND canceled_at IS NULL
   `),
   getCurrentTerm: prepare(`
     SELECT terms.*
@@ -1216,6 +1242,24 @@ async function handleApi(req, res, url) {
     if (!student) return sendJson(res, 404, { error: "Student not found" });
     statements.deleteStudent.run(id);
     statements.addAudit.run("student", id, `Student ${student.first_name} ${student.last_name} was deleted.`);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const incidentCancelMatch = url.pathname.match(/^\/api\/incidents\/(\d+)\/cancel$/);
+  if (req.method === "POST" && incidentCancelMatch) {
+    const incidentId = Number(incidentCancelMatch[1]);
+    const incident = statements.getIncident.get(incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Violation not found" });
+    if (incident.canceled_at) return sendJson(res, 200, { ok: true });
+    const body = await readBody(req);
+    const session = getSession(req);
+    const reason = nullable(body.reason) || "Canceled from follow-up review.";
+    const canceledBy = session?.email || session?.name || "Unknown";
+    const todayText = new Date().toISOString().slice(0, 10);
+    const actionNote = `Canceled violation: ${reason}`;
+    statements.cancelIncident.run(canceledBy, reason, incidentId);
+    statements.closeOpenActionsForIncident.run(todayText, actionNote, actionNote, incidentId);
+    statements.addAudit.run("incident", incidentId, `Violation was canceled by ${canceledBy}.`);
     return sendJson(res, 200, { ok: true });
   }
 

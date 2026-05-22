@@ -481,6 +481,22 @@ button {
   color: #991b1b;
 }
 
+.canceled-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.incident-row.canceled {
+  background: #f8fafc;
+}
+
 .new-badge {
   display: inline-flex;
   align-items: center;
@@ -522,6 +538,17 @@ button {
 .import-panel,
 .template-panel {
   margin-top: 18px;
+}
+
+.collapsible-panel summary {
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.collapsible-panel[open] summary {
+  margin-bottom: 14px;
 }
 
 label,

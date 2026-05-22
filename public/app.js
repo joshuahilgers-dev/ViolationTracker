@@ -48,6 +48,7 @@ const els = {
   csvImportForm: document.querySelector("#csv-import-form"),
   csvMessage: document.querySelector("#csv-message"),
   studentList: document.querySelector("#student-list"),
+  studentListPanel: document.querySelector("#student-list-panel"),
   studentSearch: document.querySelector("#student-search"),
   studentDetail: document.querySelector("#student-detail"),
   clearStudentsButton: document.querySelector("#clear-students-button"),
@@ -376,6 +377,13 @@ function renderStudents() {
     : `<div class="empty">No matching students.</div>`;
 }
 
+function handleStudentSearch() {
+  if (els.studentSearch.value.trim()) {
+    els.studentListPanel.open = true;
+  }
+  renderStudents();
+}
+
 function renderActions() {
   const groups = groupOpenActionsByStudent();
   els.actionList.innerHTML = groups.length
@@ -412,7 +420,7 @@ function followupStudentCard(group) {
         </div>
         <div class="meta">${escapeHtml(titles)}</div>
       </div>
-      <button class="primary-button" data-followup-student-id="${group.student_id}">Complete</button>
+      <button class="primary-button" data-followup-student-id="${group.student_id}">Review</button>
     </article>
   `;
 }
@@ -437,6 +445,7 @@ function actionCard(action) {
           <span>Upload Document</span>
           <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
         </label>
+        ${action.incident_id ? `<button class="danger-button" data-cancel-incident="${action.incident_id}">Cancel Entry</button>` : ""}
         <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
       </div>
     </article>
@@ -577,15 +586,20 @@ function statusStudentRow(student, key) {
 
 function incidentRows(incidents) {
   return incidents.length ? incidents.map(incident => `
-    <article class="incident-row">
-      <h4>${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}</h4>
+    <article class="incident-row ${incident.canceled_at ? "canceled" : ""}">
+      <h4>
+        ${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
+        ${incident.canceled_at ? `<span class="canceled-badge">Canceled</span>` : ""}
+      </h4>
       <div class="meta">
         <span>Reported by ${escapeHtml(incident.reported_by)}</span>
         ${incident.class_period ? `<span>Period ${escapeHtml(incident.class_period)}</span>` : ""}
         ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
         ${incident.term_name ? `<span>${escapeHtml(incident.term_name)}</span>` : ""}
+        ${incident.canceled_by ? `<span>Canceled by ${escapeHtml(incident.canceled_by)}</span>` : ""}
       </div>
       ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
+      ${incident.canceled_reason ? `<p>${escapeHtml(incident.canceled_reason)}</p>` : ""}
     </article>
   `).join("") : `<div class="empty">No violations recorded.</div>`;
 }
@@ -685,7 +699,9 @@ async function showStudentDetail(id) {
       ${documents.length ? documents.map(profileDocumentCard).join("") : `<div class="empty">No documents uploaded.</div>`}
     </div>
   `;
-  els.studentDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+  setTimeout(() => {
+    els.studentDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 0);
 }
 
 async function createStudent(event) {
@@ -895,6 +911,18 @@ async function completeAction(id) {
   }
 }
 
+async function cancelIncident(id) {
+  const reason = window.prompt("Cancel this violation entry? It will stay in the student history but will no longer count toward steps. Optional reason:");
+  if (reason === null) return;
+  await api(`/api/incidents/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  });
+  await loadBootstrap();
+  if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+  if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+}
+
 function printTemplate(url) {
   const win = window.open(url, "_blank", "noopener");
   if (!win) return;
@@ -1093,6 +1121,9 @@ document.addEventListener("click", event => {
   const completeButton = event.target.closest("[data-complete-action]");
   if (completeButton) completeAction(Number(completeButton.dataset.completeAction));
 
+  const cancelIncidentButton = event.target.closest("[data-cancel-incident]");
+  if (cancelIncidentButton) cancelIncident(Number(cancelIncidentButton.dataset.cancelIncident));
+
   const followupButton = event.target.closest("[data-followup-student-id]");
   if (followupButton) showFollowups(Number(followupButton.dataset.followupStudentId));
 
@@ -1124,7 +1155,7 @@ document.addEventListener("change", event => {
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
 els.csvImportForm.addEventListener("submit", importCsv);
-els.studentSearch.addEventListener("input", renderStudents);
+els.studentSearch.addEventListener("input", handleStudentSearch);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.startTermButton.addEventListener("click", startNewTerm);
 els.notificationForm.addEventListener("submit", saveNotificationSettings);

@@ -167,10 +167,8 @@
             <button class="danger-button" id="clear-students-button" type="button">Clear test students</button>
           </div>
           <div class="split-layout students-layout">
-            <section class="panel">
-              <div class="panel-heading">
-                <h3>Add Student</h3>
-              </div>
+            <details class="panel collapsible-panel">
+              <summary>Add Student</summary>
               <form id="student-form" class="student-form">
                 <label>First name <input name="first_name" required></label>
                 <label>Last name <input name="last_name" required></label>
@@ -183,22 +181,18 @@
                 <button type="submit" class="primary-button">Add student</button>
                 <span id="student-message" role="status"></span>
               </form>
-            </section>
-            <section class="panel">
+            </details>
+            <details class="panel collapsible-panel" id="student-list-panel">
+              <summary>Student List</summary>
               <div class="panel-heading compact-heading">
-                <h3>Student List</h3>
                 <input id="student-search" type="search" placeholder="Search">
               </div>
               <div id="student-list" class="student-list"></div>
-            </section>
+            </details>
           </div>
-          <section class="panel import-panel">
-            <div class="panel-heading">
-              <div>
-                <h3>Import Students From CSV</h3>
-                <p class="panel-note">Required columns: first name and last name. Student ID and all other fields are optional.</p>
-              </div>
-            </div>
+          <details class="panel import-panel collapsible-panel">
+            <summary>Import Students From CSV</summary>
+            <p class="panel-note">Required columns: first name and last name. Student ID and all other fields are optional.</p>
             <form id="csv-import-form" class="csv-import-form">
               <label>
                 CSV file
@@ -207,7 +201,7 @@
               <button type="submit" class="primary-button">Import CSV</button>
               <span id="csv-message" role="status"></span>
             </form>
-          </section>
+          </details>
           <section class="panel detail-panel" id="student-detail" hidden></section>
         </section>
 
@@ -225,7 +219,7 @@
           <div class="page-heading">
             <div>
               <h2 id="followups-title">Follow-Ups</h2>
-              <p id="followups-subtitle">Complete open items and print forms when needed.</p>
+              <p id="followups-subtitle">Review open items and print forms when needed.</p>
             </div>
             <button class="quiet-button" data-open-view="actions">Back to queue</button>
           </div>
