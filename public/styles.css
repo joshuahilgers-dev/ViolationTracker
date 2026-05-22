@@ -530,9 +530,18 @@ button {
 
 .student-form,
 .csv-import-form,
-.template-form {
+.template-form,
+.step-adjust-form {
   display: grid;
   gap: 12px;
+}
+
+.step-adjust-form {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
 .import-panel,

@@ -22,6 +22,15 @@ const statusLabels = {
   admin_review: "Admin review"
 };
 
+const statusLevels = {
+  no_violations: 0,
+  monitor: 1,
+  reflection: 2,
+  success_contract: 3,
+  device_restriction: 4,
+  admin_review: 5
+};
+
 const els = {
   loginScreen: document.querySelector("#login-screen"),
   appShell: document.querySelector("#app-shell"),
@@ -400,6 +409,7 @@ function groupOpenActionsByStudent() {
         student_id: studentId,
         student_name: action.student_name || `${action.first_name || ""} ${action.last_name || ""}`.trim(),
         grade: action.grade,
+        incident_id: action.incident_id,
         actions: []
       });
     }
@@ -420,7 +430,10 @@ function followupStudentCard(group) {
         </div>
         <div class="meta">${escapeHtml(titles)}</div>
       </div>
-      <button class="primary-button" data-followup-student-id="${group.student_id}">Review</button>
+      <div class="row-actions">
+        ${group.incident_id ? `<button class="danger-button" data-cancel-incident="${group.incident_id}">Cancel Entry</button>` : ""}
+        <button class="primary-button" data-followup-student-id="${group.student_id}">Review</button>
+      </div>
     </article>
   `;
 }
@@ -445,7 +458,6 @@ function actionCard(action) {
           <span>Upload Document</span>
           <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
         </label>
-        ${action.incident_id ? `<button class="danger-button" data-cancel-incident="${action.incident_id}">Cancel Entry</button>` : ""}
         <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
       </div>
     </article>
@@ -620,6 +632,53 @@ function profileDocumentCard(document) {
   `;
 }
 
+function stepAdjustmentOptions(currentKey) {
+  const currentLevel = statusLevels[currentKey] ?? 0;
+  return ["reflection", "success_contract", "device_restriction", "admin_review"]
+    .filter(key => statusLevels[key] > currentLevel)
+    .map(key => `<option value="${key}">${escapeHtml(statusLabels[key])}</option>`)
+    .join("");
+}
+
+function stepAdjustmentForm(student) {
+  const options = stepAdjustmentOptions(student.status.key);
+  if (!options) {
+    return `<div class="empty">This student is already at the highest current step.</div>`;
+  }
+  return `
+    <form class="step-adjust-form" data-step-adjust-form="${student.id}" hidden>
+      <label>
+        Adjust current step to
+        <select name="target_step" required>
+          <option value="">Choose higher step</option>
+          ${options}
+        </select>
+      </label>
+      <label>
+        Reason
+        <textarea name="reason" rows="3" required placeholder="Document why this student is being moved to a higher step."></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="primary-button">Save adjustment</button>
+        <span role="status"></span>
+      </div>
+    </form>
+  `;
+}
+
+function adjustmentRows(adjustments) {
+  return adjustments.length ? adjustments.map(adjustment => `
+    <article class="incident-row">
+      <h4>${escapeHtml(String(adjustment.created_at || "").slice(0, 10))}: moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
+      <div class="meta">
+        ${adjustment.term_name ? `<span>${escapeHtml(adjustment.term_name)}</span>` : ""}
+        ${adjustment.adjusted_by ? `<span>Adjusted by ${escapeHtml(adjustment.adjusted_by)}</span>` : ""}
+      </div>
+      <p>${escapeHtml(adjustment.reason)}</p>
+    </article>
+  `).join("") : `<div class="empty">No administrative step adjustments recorded.</div>`;
+}
+
 async function showFollowups(studentId) {
   const student = await api(`/api/students/${studentId}`);
   state.selectedFollowupStudentId = studentId;
@@ -656,6 +715,8 @@ async function showStudentDetail(id) {
   const openActions = actionsWithDocuments.filter(action => action.status === "open");
   const currentIncidents = student.currentIncidents || student.incidents || [];
   const previousIncidents = student.previousIncidents || [];
+  const currentAdjustments = student.currentAdjustments || [];
+  const previousAdjustments = student.previousAdjustments || [];
   els.studentDetail.hidden = false;
   els.studentDetail.innerHTML = `
     <div class="detail-header">
@@ -669,9 +730,11 @@ async function showStudentDetail(id) {
       </div>
       <div class="detail-actions">
         <span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>
+        <button class="quiet-button" data-toggle-step-adjust="${student.id}">Adjust Current Step</button>
         <button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>
       </div>
     </div>
+    ${stepAdjustmentForm(student)}
     <div class="detail-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
@@ -688,10 +751,20 @@ async function showStudentDetail(id) {
     <div class="timeline">
       ${incidentRows(currentIncidents)}
     </div>
+    <h4 class="section-title">Administrative Step Adjustments: Current Term</h4>
+    <div class="timeline">
+      ${adjustmentRows(currentAdjustments)}
+    </div>
     <details class="history-details">
       <summary>Violation History: Previous Terms (${previousIncidents.length})</summary>
       <div class="timeline">
         ${incidentRows(previousIncidents)}
+      </div>
+    </details>
+    <details class="history-details">
+      <summary>Administrative Step Adjustments: Previous Terms (${previousAdjustments.length})</summary>
+      <div class="timeline">
+        ${adjustmentRows(previousAdjustments)}
       </div>
     </details>
     <h4 class="section-title">Stored Documents</h4>
@@ -923,6 +996,30 @@ async function cancelIncident(id) {
   if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
 }
 
+async function submitStepAdjustment(form) {
+  const studentId = Number(form.dataset.stepAdjustForm);
+  const status = form.querySelector("[role='status']");
+  const submitButton = form.querySelector("button[type='submit']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Saving...";
+  status.textContent = "Saving...";
+  try {
+    const payload = Object.fromEntries(new FormData(form).entries());
+    await api(`/api/students/${studentId}/step-adjustments`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    await showStudentDetail(studentId);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
 function printTemplate(url) {
   const win = window.open(url, "_blank", "noopener");
   if (!win) return;
@@ -1124,6 +1221,12 @@ document.addEventListener("click", event => {
   const cancelIncidentButton = event.target.closest("[data-cancel-incident]");
   if (cancelIncidentButton) cancelIncident(Number(cancelIncidentButton.dataset.cancelIncident));
 
+  const adjustStepButton = event.target.closest("[data-toggle-step-adjust]");
+  if (adjustStepButton) {
+    const form = els.studentDetail.querySelector(`[data-step-adjust-form="${adjustStepButton.dataset.toggleStepAdjust}"]`);
+    if (form) form.hidden = !form.hidden;
+  }
+
   const followupButton = event.target.closest("[data-followup-student-id]");
   if (followupButton) showFollowups(Number(followupButton.dataset.followupStudentId));
 
@@ -1149,6 +1252,14 @@ document.addEventListener("change", event => {
   if (documentInput) {
     uploadActionDocument(Number(documentInput.dataset.documentFile), documentInput.files[0]);
     documentInput.value = "";
+  }
+});
+
+document.addEventListener("submit", event => {
+  const form = event.target.closest("[data-step-adjust-form]");
+  if (form) {
+    event.preventDefault();
+    submitStepAdjustment(form);
   }
 });
 

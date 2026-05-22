@@ -309,6 +309,16 @@ function migrate() {
       uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS step_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      term_id INTEGER,
+      target_step TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      adjusted_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -593,6 +603,23 @@ function prepareStatements() {
       uploaded_by
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  adjustmentsForStatus: prepare(`
+    SELECT *
+    FROM step_adjustments
+    WHERE student_id = ? AND term_id = ?
+    ORDER BY created_at, id
+  `),
+  listAdjustmentsForStudent: prepare(`
+    SELECT a.*, terms.name AS term_name
+    FROM step_adjustments a
+    LEFT JOIN terms ON terms.id = a.term_id
+    WHERE a.student_id = ?
+    ORDER BY a.created_at DESC, a.id DESC
+  `),
+  insertStepAdjustment: prepare(`
+    INSERT INTO step_adjustments (student_id, term_id, target_step, reason, adjusted_by)
+    VALUES (?, ?, ?, ?, ?)
   `)
 };
 }
@@ -665,7 +692,14 @@ function statusFromIncidentHistory(incidents) {
 }
 
 function statusForStudent(studentId) {
-  return statusFromIncidentHistory(statements.incidentsForStatus.all(studentId, currentTerm().id));
+  const term = currentTerm();
+  const automaticStatus = statusFromIncidentHistory(statements.incidentsForStatus.all(studentId, term.id));
+  const adjustmentStatus = statements.adjustmentsForStatus
+    .all(studentId, term.id)
+    .map(adjustment => STATUS_DETAILS[adjustment.target_step])
+    .filter(Boolean)
+    .reduce((highest, status) => (status.level > highest.level ? status : highest), STATUS_DETAILS.no_violations);
+  return adjustmentStatus.level > automaticStatus.level ? adjustmentStatus : automaticStatus;
 }
 
 function toStudentView(row) {
@@ -698,6 +732,13 @@ function splitIncidentsByTerm(incidents, currentTermId) {
   return {
     currentIncidents: incidents.filter(incident => Number(incident.term_id) === Number(currentTermId)),
     previousIncidents: incidents.filter(incident => Number(incident.term_id) !== Number(currentTermId))
+  };
+}
+
+function splitAdjustmentsByTerm(adjustments, currentTermId) {
+  return {
+    currentAdjustments: adjustments.filter(adjustment => Number(adjustment.term_id) === Number(currentTermId)),
+    previousAdjustments: adjustments.filter(adjustment => Number(adjustment.term_id) !== Number(currentTermId))
   };
 }
 
@@ -1224,6 +1265,8 @@ async function handleApi(req, res, url) {
     const counts = statements.incidentCounts.get(id, term.id);
     const incidents = statements.incidentsForStudent.all(id);
     const { currentIncidents, previousIncidents } = splitIncidentsByTerm(incidents, term.id);
+    const adjustments = statements.listAdjustmentsForStudent.all(id);
+    const { currentAdjustments, previousAdjustments } = splitAdjustmentsByTerm(adjustments, term.id);
     return sendJson(res, 200, {
       ...student,
       counts,
@@ -1231,6 +1274,9 @@ async function handleApi(req, res, url) {
       incidents,
       currentIncidents,
       previousIncidents,
+      stepAdjustments: adjustments,
+      currentAdjustments,
+      previousAdjustments,
       actions: statements.actionsForStudent.all(id),
       documents: statements.listDocumentsForStudent.all(id).map(documentView)
     });
@@ -1243,6 +1289,32 @@ async function handleApi(req, res, url) {
     statements.deleteStudent.run(id);
     statements.addAudit.run("student", id, `Student ${student.first_name} ${student.last_name} was deleted.`);
     return sendJson(res, 200, { ok: true });
+  }
+
+  const stepAdjustmentMatch = url.pathname.match(/^\/api\/students\/(\d+)\/step-adjustments$/);
+  if (req.method === "POST" && stepAdjustmentMatch) {
+    const id = Number(stepAdjustmentMatch[1]);
+    const student = statements.getStudent.get(id);
+    if (!student) return sendJson(res, 404, { error: "Student not found" });
+    const body = await readBody(req);
+    const targetStep = required(body.target_step, "Adjusted step");
+    const targetStatus = STATUS_DETAILS[targetStep];
+    if (!targetStatus || !["reflection", "success_contract", "device_restriction", "admin_review"].includes(targetStep)) {
+      return sendJson(res, 400, { error: "Choose a valid higher step." });
+    }
+    const currentStatus = statusForStudent(id);
+    if (targetStatus.level <= currentStatus.level) {
+      return sendJson(res, 400, { error: "Choose a step higher than the student's current step." });
+    }
+    const reason = required(body.reason, "Reason");
+    const term = currentTerm();
+    const session = getSession(req);
+    const adjustedBy = session?.email || session?.name || "Unknown";
+    const todayText = new Date().toISOString().slice(0, 10);
+    const result = statements.insertStepAdjustment.run(id, term.id, targetStep, reason, adjustedBy);
+    ensureWorkflowActions(id, null, todayText, currentStatus, targetStatus);
+    statements.addAudit.run("step_adjustment", Number(result.lastInsertRowid), `Step adjusted to ${targetStatus.label} for ${student.first_name} ${student.last_name}.`);
+    return sendJson(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
   }
 
   const incidentCancelMatch = url.pathname.match(/^\/api\/incidents\/(\d+)\/cancel$/);
