@@ -1229,7 +1229,7 @@ document.addEventListener("click", event => {
 
   const adjustStepButton = event.target.closest("[data-toggle-step-adjust]");
   if (adjustStepButton) {
-    const form = els.studentDetail.querySelector(`[data-step-adjust-form="${adjustStepButton.dataset.toggleStepAdjust}"]`);
+    const form = document.querySelector(`[data-step-adjust-form="${adjustStepButton.dataset.toggleStepAdjust}"]`);
     if (form) form.hidden = !form.hidden;
   }
 
