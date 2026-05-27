@@ -449,6 +449,7 @@ function followupStudentCard(group) {
 
 function actionCard(action) {
   const template = templateForAction(action.action_type);
+  const allowsDocumentUpload = !String(action.action_type || "").startsWith("parent_contact");
   return `
     <article class="action-row" data-action-id="${action.id}">
       <div>
@@ -463,10 +464,12 @@ function actionCard(action) {
       </div>
       <div class="row-actions">
         ${template ? `<button class="quiet-button" data-print-template="${escapeHtml(template.url)}">Print</button>` : ""}
-        <label class="upload-button">
-          <span>Upload Document</span>
-          <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
-        </label>
+        ${allowsDocumentUpload ? `
+          <label class="upload-button">
+            <span>Upload Document</span>
+            <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+          </label>
+        ` : ""}
         <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
       </div>
     </article>
