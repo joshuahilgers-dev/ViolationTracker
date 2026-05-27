@@ -234,6 +234,9 @@ function migrate() {
       guardian_contact TEXT,
       device_asset_tag TEXT,
       active INTEGER NOT NULL DEFAULT 1,
+      archived_at TEXT,
+      archived_by TEXT,
+      archived_reason TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -332,6 +335,9 @@ function migrate() {
     );
   `, true);
 
+  ensureColumn("students", "archived_at", "TEXT");
+  ensureColumn("students", "archived_by", "TEXT");
+  ensureColumn("students", "archived_reason", "TEXT");
   ensureColumn("incidents", "term_id", "INTEGER");
   ensureColumn("incidents", "canceled_at", "TEXT");
   ensureColumn("incidents", "canceled_by", "TEXT");
@@ -380,6 +386,17 @@ function prepareStatements() {
   getStudentByNumber: prepare(`
     SELECT * FROM students WHERE student_number = ? AND student_number IS NOT NULL AND student_number != '' LIMIT 1
   `),
+  listAllStudents: prepare(`
+    SELECT * FROM students ORDER BY last_name, first_name
+  `),
+  listArchivedStudents: prepare(`
+    SELECT *
+    FROM students
+    WHERE active = 0
+      AND (? = '' OR LOWER(first_name || ' ' || last_name || ' ' || COALESCE(student_number, '')) LIKE ?)
+    ORDER BY last_name, first_name
+    LIMIT 100
+  `),
   createStudent: prepare(`
     INSERT INTO students (student_number, first_name, last_name, grade, team, guardian_name, guardian_contact, device_asset_tag)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -393,8 +410,27 @@ function prepareStatements() {
         guardian_name = COALESCE(?, guardian_name),
         guardian_contact = COALESCE(?, guardian_contact),
         device_asset_tag = COALESCE(?, device_asset_tag),
-        active = 1
+        active = 1,
+        archived_at = NULL,
+        archived_by = NULL,
+        archived_reason = NULL
     WHERE student_number = ?
+  `),
+  archiveStudent: prepare(`
+    UPDATE students
+    SET active = 0,
+        archived_at = ?,
+        archived_by = ?,
+        archived_reason = ?
+    WHERE id = ?
+  `),
+  restoreStudent: prepare(`
+    UPDATE students
+    SET active = 1,
+        archived_at = NULL,
+        archived_by = NULL,
+        archived_reason = NULL
+    WHERE id = ?
   `),
   deleteStudent: prepare(`
     DELETE FROM students WHERE id = ?
@@ -1099,6 +1135,141 @@ function createOrUpdateStudent(row) {
   return "created";
 }
 
+function studentSummary(student) {
+  return {
+    id: student.id || null,
+    student_number: student.student_number || "",
+    first_name: student.first_name || "",
+    last_name: student.last_name || "",
+    grade: student.grade || "",
+    active: Number(student.active ?? 1)
+  };
+}
+
+function rosterKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeRosterRow(row, rowNumber, seenNumbers) {
+  const firstName = nullable(row.first_name);
+  const lastName = nullable(row.last_name);
+  const studentNumber = nullable(row.student_number);
+  const errors = [];
+  if (!firstName) errors.push("First name is required.");
+  if (!lastName) errors.push("Last name is required.");
+  if (!studentNumber) errors.push("Student Number is required.");
+  const key = rosterKey(studentNumber);
+  if (key && seenNumbers.has(key)) errors.push(`Duplicate Student Number ${studentNumber}.`);
+  if (key) seenNumbers.add(key);
+  return {
+    row: rowNumber,
+    key,
+    errors,
+    student: {
+      first_name: firstName || "",
+      last_name: lastName || "",
+      student_number: studentNumber || "",
+      grade: nullable(row.grade) || "",
+      team: nullable(row.team) || "",
+      guardian_name: nullable(row.guardian_name) || "",
+      guardian_contact: nullable(row.guardian_contact) || "",
+      device_asset_tag: nullable(row.device_asset_tag) || ""
+    }
+  };
+}
+
+function buildRosterRolloverPreview(rows) {
+  const rosterRows = Array.isArray(rows) ? rows : [];
+  const seenNumbers = new Set();
+  const existingStudents = statements.listAllStudents.all();
+  const existingByNumber = new Map(
+    existingStudents
+      .filter(student => student.student_number)
+      .map(student => [rosterKey(student.student_number), student])
+  );
+  const rosterKeys = new Set();
+  const validRows = [];
+  const errors = [];
+  const updates = [];
+  const reactivations = [];
+  const creates = [];
+
+  rosterRows.forEach((row, index) => {
+    const normalized = normalizeRosterRow(row, index + 2, seenNumbers);
+    if (normalized.errors.length) {
+      errors.push({
+        row: normalized.row,
+        student_number: normalized.student.student_number,
+        name: `${normalized.student.first_name} ${normalized.student.last_name}`.trim(),
+        error: normalized.errors.join(" ")
+      });
+      return;
+    }
+    validRows.push(normalized.student);
+    rosterKeys.add(normalized.key);
+    const existing = existingByNumber.get(normalized.key);
+    if (!existing) {
+      creates.push({ incoming: studentSummary(normalized.student) });
+    } else if (Number(existing.active) === 0) {
+      reactivations.push({ existing: studentSummary(existing), incoming: studentSummary(normalized.student) });
+    } else {
+      updates.push({ existing: studentSummary(existing), incoming: studentSummary(normalized.student) });
+    }
+  });
+
+  const archiveCandidates = existingStudents
+    .filter(student => Number(student.active) === 1)
+    .filter(student => !student.student_number || !rosterKeys.has(rosterKey(student.student_number)))
+    .map(studentSummary);
+
+  return {
+    summary: {
+      uploaded: rosterRows.length,
+      valid: validRows.length,
+      updates: updates.length,
+      reactivations: reactivations.length,
+      creates: creates.length,
+      archiveCandidates: archiveCandidates.length,
+      skipped: errors.length
+    },
+    updates,
+    reactivations,
+    creates,
+    archiveCandidates,
+    errors,
+    validRows
+  };
+}
+
+function startNewTerm(name, reason) {
+  const todayText = new Date().toISOString().slice(0, 10);
+  const result = statements.insertTerm.run(name, todayText);
+  const termId = Number(result.lastInsertRowid);
+  statements.setSetting.run(CURRENT_TERM_SETTING, String(termId));
+  statements.archiveOpenActions.run(todayText);
+  statements.addAudit.run("term", termId, reason || `${name} was started.`);
+  return currentTerm();
+}
+
+function applyRosterRollover(rows, schoolYearLabel, actor) {
+  const preview = buildRosterRolloverPreview(rows);
+  const todayText = new Date().toISOString().slice(0, 10);
+  const label = nullable(schoolYearLabel) || `School Year starting ${todayText}`;
+  for (const row of preview.validRows) {
+    createOrUpdateStudent(row);
+  }
+  for (const student of preview.archiveCandidates) {
+    statements.archiveStudent.run(todayText, actor, `Archived during ${label} roster rollover.`, student.id);
+  }
+  const term = startNewTerm(label, `${label} roster rollover was applied.`);
+  statements.addAudit.run(
+    "roster_rollover",
+    term.id,
+    `Roster rollover applied: ${preview.summary.updates} updated, ${preview.summary.reactivations} reactivated, ${preview.summary.creates} created, ${preview.summary.archiveCandidates} archived.`
+  );
+  return { ...preview, currentTerm: term };
+}
+
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/auth/config") {
     return sendJson(res, 200, {
@@ -1194,6 +1365,12 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, statements.listStudents.all(currentTerm().id, search, like).map(toStudentView));
   }
 
+  if (req.method === "GET" && url.pathname === "/api/students/archived") {
+    const search = (url.searchParams.get("q") || "").trim().toLowerCase();
+    const like = `%${search}%`;
+    return sendJson(res, 200, statements.listArchivedStudents.all(search, like));
+  }
+
   if (req.method === "GET" && url.pathname === "/api/settings/notifications") {
     return sendJson(res, 200, {
       teamEmails: getTeamNotificationEmails(),
@@ -1244,6 +1421,27 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, result);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/roster-rollover/preview") {
+    const body = await readBody(req);
+    if (!Array.isArray(body.students)) {
+      return sendJson(res, 400, { error: "Students array is required." });
+    }
+    return sendJson(res, 200, buildRosterRolloverPreview(body.students));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/roster-rollover/apply") {
+    const body = await readBody(req);
+    if (body.confirmation !== "START NEW SCHOOL YEAR") {
+      return sendJson(res, 400, { error: "Confirmation phrase is required." });
+    }
+    if (!Array.isArray(body.students)) {
+      return sendJson(res, 400, { error: "Students array is required." });
+    }
+    const session = getSession(req);
+    const actor = session?.email || session?.name || "Unknown";
+    return sendJson(res, 200, applyRosterRollover(body.students, body.schoolYearLabel, actor));
+  }
+
   if (req.method === "DELETE" && url.pathname === "/api/students") {
     const body = await readBody(req);
     if (body.confirmation !== "DELETE ALL STUDENTS") {
@@ -1291,11 +1489,24 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  const restoreStudentMatch = url.pathname.match(/^\/api\/students\/(\d+)\/restore$/);
+  if (req.method === "POST" && restoreStudentMatch) {
+    const id = Number(restoreStudentMatch[1]);
+    const student = statements.getStudent.get(id);
+    if (!student) return sendJson(res, 404, { error: "Student not found" });
+    statements.restoreStudent.run(id);
+    statements.addAudit.run("student", id, `Student ${student.first_name} ${student.last_name} was restored.`);
+    return sendJson(res, 200, { ok: true });
+  }
+
   const stepAdjustmentMatch = url.pathname.match(/^\/api\/students\/(\d+)\/step-adjustments$/);
   if (req.method === "POST" && stepAdjustmentMatch) {
     const id = Number(stepAdjustmentMatch[1]);
     const student = statements.getStudent.get(id);
     if (!student) return sendJson(res, 404, { error: "Student not found" });
+    if (Number(student.active) === 0) {
+      return sendJson(res, 400, { error: "Archived students must be restored before their current step can be adjusted." });
+    }
     const body = await readBody(req);
     const targetStep = required(body.target_step, "Adjusted step");
     const targetStatus = STATUS_DETAILS[targetStep];
@@ -1338,6 +1549,11 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/incidents") {
     const body = await readBody(req);
     const studentId = Number(required(body.student_id, "Student"));
+    const student = statements.getStudent.get(studentId);
+    if (!student) return sendJson(res, 404, { error: "Student not found" });
+    if (Number(student.active) === 0) {
+      return sendJson(res, 400, { error: "Archived students must be restored before a new violation can be entered." });
+    }
     const occurredOn = required(body.occurred_on, "Date");
     const reportedBy = required(body.reported_by, "Teacher or staff member");
     const severity = required(body.severity, "Severity").toLowerCase();

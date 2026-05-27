@@ -7,6 +7,8 @@ const state = {
   infractionTypes: [],
   templates: [],
   openActions: [],
+  rolloverStudents: [],
+  rolloverPreview: null,
   selectedStudentId: null,
   selectedFollowupStudentId: null,
   selectedStatusKey: null
@@ -61,6 +63,8 @@ const els = {
   studentSearch: document.querySelector("#student-search"),
   studentDetail: document.querySelector("#student-detail"),
   clearStudentsButton: document.querySelector("#clear-students-button"),
+  archivedStudentSearch: document.querySelector("#archived-student-search"),
+  archivedStudentList: document.querySelector("#archived-student-list"),
   actionList: document.querySelector("#action-list"),
   followupsTitle: document.querySelector("#followups-title"),
   followupsSubtitle: document.querySelector("#followups-subtitle"),
@@ -75,6 +79,10 @@ const els = {
   currentTermLabel: document.querySelector("#current-term-label"),
   termMessage: document.querySelector("#term-message"),
   startTermButton: document.querySelector("#start-term-button"),
+  rolloverForm: document.querySelector("#rollover-form"),
+  rolloverMessage: document.querySelector("#rollover-message"),
+  rolloverPreview: document.querySelector("#rollover-preview"),
+  rolloverApplyButton: document.querySelector("#rollover-apply-button"),
   notificationForm: document.querySelector("#notification-form"),
   notificationMessage: document.querySelector("#notification-message"),
   notificationStatus: document.querySelector("#notification-status")
@@ -209,6 +217,7 @@ function renderAll() {
   renderDashboardActions();
   renderStatusGroups();
   renderStudents();
+  if (!els.archivedStudentSearch.value.trim()) renderArchivedStudents([], "");
   renderActions();
   renderTemplates();
   renderInfractionSettings();
@@ -714,6 +723,7 @@ async function showFollowups(studentId) {
 async function showStudentDetail(id) {
   const student = await api(`/api/students/${id}`);
   state.selectedStudentId = id;
+  const isArchived = Number(student.active) === 0;
   const documents = student.documents || [];
   const actionsWithDocuments = attachActionDocuments(student.actions, documents);
   const openActions = actionsWithDocuments.filter(action => action.status === "open");
@@ -733,22 +743,32 @@ async function showStudentDetail(id) {
         </div>
       </div>
       <div class="detail-actions">
-        <span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>
-        <button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>
+        ${isArchived ? `<span class="badge archived">Archived</span>` : `<span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>`}
+        ${isArchived
+          ? `<button class="primary-button" data-restore-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Restore student</button>`
+          : `<button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>`}
       </div>
     </div>
+    ${isArchived ? `
+      <div class="archived-note">
+        This student is archived and hidden from active workflows. Restore the student to enter new violations or include them in active lists.
+      </div>
+    ` : ""}
     <div class="detail-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
       <div class="detail-stat"><span>Major</span><strong>${Number(student.counts.major_count || 0)}</strong></div>
       <div class="detail-stat"><span>Parent/guardian</span><strong>${escapeHtml(student.guardian_name || "Not set")}</strong></div>
       <div class="detail-stat"><span>Contact</span><strong>${escapeHtml(student.guardian_contact || "Not set")}</strong></div>
-      <div class="detail-stat"><span>Current step</span><strong>${escapeHtml(student.status.description)}</strong></div>
+      <div class="detail-stat"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
+      ${isArchived ? `<div class="detail-stat full-width"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>` : ""}
     </div>
-    <h4 class="section-title">Open Follow-Ups</h4>
-    <div class="timeline">
-      ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
-    </div>
+    ${isArchived ? "" : `
+      <h4 class="section-title">Open Follow-Ups</h4>
+      <div class="timeline">
+        ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
+      </div>
+    `}
     <h4 class="section-title">Violation History: Current Term</h4>
     <div class="timeline">
       ${incidentRows(currentIncidents)}
@@ -878,15 +898,10 @@ function studentFieldForHeader(header) {
   return map[key] || null;
 }
 
-async function importCsv(event) {
-  event.preventDefault();
-  const file = els.csvImportForm.elements.csv_file.files[0];
-  if (!file) return;
-  els.csvMessage.textContent = "Reading CSV...";
+async function studentsFromCsvFile(file, requireStudentNumber = false) {
   const rows = parseCsv(await file.text());
   if (rows.length < 2) {
-    els.csvMessage.textContent = "CSV must include a header row and at least one student.";
-    return;
+    throw new Error("CSV must include a header row and at least one student.");
   }
   const fields = rows[0].map(studentFieldForHeader);
   const students = rows.slice(1).map(row => {
@@ -898,7 +913,23 @@ async function importCsv(event) {
   }).filter(student => student.first_name && student.last_name);
 
   if (students.length === 0) {
-    els.csvMessage.textContent = "No students found. Check first name and last name column headers.";
+    throw new Error(requireStudentNumber
+      ? "No students found. Check first name, last name, and Student Number column headers."
+      : "No students found. Check first name and last name column headers.");
+  }
+  return students;
+}
+
+async function importCsv(event) {
+  event.preventDefault();
+  const file = els.csvImportForm.elements.csv_file.files[0];
+  if (!file) return;
+  els.csvMessage.textContent = "Reading CSV...";
+  let students;
+  try {
+    students = await studentsFromCsvFile(file);
+  } catch (error) {
+    els.csvMessage.textContent = error.message;
     return;
   }
 
@@ -913,6 +944,153 @@ async function importCsv(event) {
   els.csvMessage.textContent = `${result.created} added, ${result.updated} updated, ${result.skipped} skipped.`;
   if (result.errors?.length) {
     console.warn("CSV import errors", result.errors);
+  }
+}
+
+function renderArchivedStudents(students, query = "") {
+  if (!query.trim()) {
+    els.archivedStudentList.innerHTML = `<div class="empty">Search by name or student ID to find archived students.</div>`;
+    return;
+  }
+  els.archivedStudentList.innerHTML = students.length
+    ? students.map(student => `
+      <article class="list-row">
+        <div>
+          <h4>${escapeHtml(student.last_name)}, ${escapeHtml(student.first_name)}</h4>
+          <div class="meta">
+            <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
+            <span>${student.student_number ? `ID ${escapeHtml(student.student_number)}` : "No student ID"}</span>
+            <span>${student.archived_at ? `Archived ${escapeHtml(formatDate(student.archived_at))}` : "Archived"}</span>
+          </div>
+        </div>
+        <div class="row-actions">
+          <button class="quiet-button" data-student-id="${student.id}">Review</button>
+          <button class="primary-button" data-restore-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Restore</button>
+        </div>
+      </article>
+    `).join("")
+    : `<div class="empty">No archived students matched that search.</div>`;
+}
+
+async function searchArchivedStudents() {
+  const query = els.archivedStudentSearch.value.trim();
+  if (!query) {
+    renderArchivedStudents([], query);
+    return;
+  }
+  const students = await api(`/api/students/archived?q=${encodeURIComponent(query)}`);
+  renderArchivedStudents(students, query);
+}
+
+async function restoreStudent(id, name) {
+  const confirmed = window.confirm(`Restore ${name || "this student"} to the active roster?`);
+  if (!confirmed) return;
+  await api(`/api/students/${id}/restore`, { method: "POST" });
+  await loadBootstrap();
+  await searchArchivedStudents();
+  if (Number(state.selectedStudentId) === Number(id)) {
+    await showStudentDetail(id);
+  }
+}
+
+function previewList(title, items, renderer) {
+  const shown = items.slice(0, 8);
+  const extra = items.length - shown.length;
+  return `
+    <div class="preview-list">
+      <h4>${escapeHtml(title)} (${items.length})</h4>
+      ${shown.length ? shown.map(renderer).join("") : `<div class="empty small">None</div>`}
+      ${extra > 0 ? `<div class="meta">+ ${extra} more</div>` : ""}
+    </div>
+  `;
+}
+
+function studentPreviewName(student) {
+  return `${student.last_name || ""}, ${student.first_name || ""}${student.student_number ? ` - ID ${student.student_number}` : ""}${student.grade ? ` - Grade ${student.grade}` : ""}`;
+}
+
+function renderRolloverPreview(preview) {
+  if (!preview) {
+    els.rolloverPreview.innerHTML = "";
+    els.rolloverApplyButton.disabled = true;
+    return;
+  }
+  const summary = preview.summary;
+  els.rolloverApplyButton.disabled = false;
+  els.rolloverPreview.innerHTML = `
+    <div class="preview-summary">
+      <div class="detail-stat"><span>Updates</span><strong>${summary.updates}</strong></div>
+      <div class="detail-stat"><span>Reactivations</span><strong>${summary.reactivations}</strong></div>
+      <div class="detail-stat"><span>New students</span><strong>${summary.creates}</strong></div>
+      <div class="detail-stat"><span>Archive candidates</span><strong>${summary.archiveCandidates}</strong></div>
+      <div class="detail-stat"><span>Skipped/errors</span><strong>${summary.skipped}</strong></div>
+    </div>
+    <div class="preview-grid">
+      ${previewList("Returning updates", preview.updates, item => `<div class="meta">${escapeHtml(studentPreviewName(item.incoming))}</div>`)}
+      ${previewList("Previously archived to restore", preview.reactivations, item => `<div class="meta">${escapeHtml(studentPreviewName(item.incoming))}</div>`)}
+      ${previewList("New students to add", preview.creates, item => `<div class="meta">${escapeHtml(studentPreviewName(item.incoming))}</div>`)}
+      ${previewList("Students to archive", preview.archiveCandidates, item => `<div class="meta">${escapeHtml(studentPreviewName(item))}</div>`)}
+      ${previewList("Skipped rows", preview.errors, item => `<div class="meta">Row ${escapeHtml(item.row)}: ${escapeHtml(item.error)}</div>`)}
+    </div>
+  `;
+}
+
+async function previewRollover(event) {
+  event.preventDefault();
+  const file = els.rolloverForm.elements.roster_file.files[0];
+  if (!file) return;
+  els.rolloverMessage.textContent = "Reading roster...";
+  try {
+    const students = await studentsFromCsvFile(file, true);
+    state.rolloverStudents = students;
+    const preview = await api("/api/roster-rollover/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        students,
+        schoolYearLabel: els.rolloverForm.elements.school_year_label.value
+      })
+    });
+    state.rolloverPreview = preview;
+    renderRolloverPreview(preview);
+    els.rolloverMessage.textContent = "Preview ready. Review before applying.";
+  } catch (error) {
+    state.rolloverStudents = [];
+    state.rolloverPreview = null;
+    renderRolloverPreview(null);
+    els.rolloverMessage.textContent = error.message;
+  }
+}
+
+async function applyRollover() {
+  if (!state.rolloverPreview || !state.rolloverStudents.length) return;
+  const phrase = window.prompt("This will start a new school year, archive students missing from the roster, and reset the active term. Type START NEW SCHOOL YEAR to continue.");
+  if (phrase !== "START NEW SCHOOL YEAR") return;
+  els.rolloverApplyButton.disabled = true;
+  els.rolloverMessage.textContent = "Applying rollover...";
+  try {
+    const result = await api("/api/roster-rollover/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        students: state.rolloverStudents,
+        schoolYearLabel: els.rolloverForm.elements.school_year_label.value,
+        confirmation: phrase
+      })
+    });
+    state.rolloverPreview = result;
+    renderRolloverPreview(result);
+    els.rolloverForm.reset();
+    state.rolloverStudents = [];
+    state.rolloverPreview = null;
+    state.selectedStudentId = null;
+    els.studentDetail.hidden = true;
+    els.studentDetail.innerHTML = "";
+    await loadBootstrap();
+    els.rolloverMessage.textContent = "New school year rollover applied.";
+    els.rolloverApplyButton.disabled = true;
+  } catch (error) {
+    els.rolloverMessage.textContent = error.message;
+  } finally {
+    els.rolloverApplyButton.disabled = !state.rolloverPreview;
   }
 }
 
@@ -1251,6 +1429,11 @@ document.addEventListener("click", event => {
   if (deleteStudentButton) {
     deleteStudent(Number(deleteStudentButton.dataset.deleteStudent), deleteStudentButton.dataset.studentName);
   }
+
+  const restoreStudentButton = event.target.closest("[data-restore-student]");
+  if (restoreStudentButton) {
+    restoreStudent(Number(restoreStudentButton.dataset.restoreStudent), restoreStudentButton.dataset.studentName);
+  }
 });
 
 document.addEventListener("change", event => {
@@ -1272,7 +1455,10 @@ document.addEventListener("submit", event => {
 els.incidentForm.addEventListener("submit", createIncident);
 els.studentForm.addEventListener("submit", createStudent);
 els.csvImportForm.addEventListener("submit", importCsv);
+els.rolloverForm.addEventListener("submit", previewRollover);
+els.rolloverApplyButton.addEventListener("click", applyRollover);
 els.studentSearch.addEventListener("input", handleStudentSearch);
+els.archivedStudentSearch.addEventListener("input", searchArchivedStudents);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.startTermButton.addEventListener("click", startNewTerm);
 els.notificationForm.addEventListener("submit", saveNotificationSettings);

@@ -202,6 +202,14 @@
               <span id="csv-message" role="status"></span>
             </form>
           </details>
+          <details class="panel import-panel collapsible-panel">
+            <summary>Archived Students</summary>
+            <p class="panel-note">Search students who have been archived after leaving the active roster.</p>
+            <div class="compact-heading">
+              <input id="archived-student-search" type="search" placeholder="Search archived students">
+            </div>
+            <div id="archived-student-list" class="student-list"></div>
+          </details>
           <section class="panel detail-panel" id="student-detail" hidden></section>
         </section>
 
@@ -258,6 +266,30 @@
               <span id="current-term-label">Current term loading...</span>
               <span id="term-message" role="status"></span>
             </div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Start New School Year</h3>
+                <p class="panel-note">Preview a full roster CSV, archive students missing from it, update returning students, add new students, and start a fresh term.</p>
+              </div>
+            </div>
+            <form id="rollover-form" class="csv-import-form">
+              <label>
+                School year label
+                <input name="school_year_label" placeholder="2026-2027 School Year">
+              </label>
+              <label>
+                Full roster CSV
+                <input type="file" name="roster_file" accept=".csv,text/csv" required>
+              </label>
+              <div class="form-actions">
+                <button type="submit" class="primary-button">Preview rollover</button>
+                <button type="button" class="danger-button" id="rollover-apply-button" disabled>Apply rollover</button>
+                <span id="rollover-message" role="status"></span>
+              </div>
+            </form>
+            <div id="rollover-preview" class="rollover-preview"></div>
           </section>
           <div class="split-layout">
             <section class="panel">
