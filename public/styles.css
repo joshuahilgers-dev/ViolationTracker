@@ -253,6 +253,7 @@ button {
 .primary-button,
 .quiet-button,
 .danger-button,
+.success-button,
 .upload-button,
 .quiet-link-button {
   display: inline-flex;
@@ -280,6 +281,15 @@ button {
   background: #f8fafc;
   border-color: var(--line);
   color: var(--text);
+}
+
+.success-button {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.success-button:hover {
+  background: #15803d;
 }
 
 .upload-button,

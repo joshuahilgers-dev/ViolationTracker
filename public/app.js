@@ -470,7 +470,7 @@ function actionCard(action) {
             <input type="file" data-document-file="${action.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
           </label>
         ` : ""}
-        <button class="quiet-button" data-complete-action="${action.id}">Complete</button>
+        <button class="success-button" data-complete-action="${action.id}">Complete</button>
       </div>
     </article>
   `;
