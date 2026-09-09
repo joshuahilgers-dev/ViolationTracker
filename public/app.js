@@ -243,6 +243,8 @@ function renderNotificationSettings() {
 }
 
 function switchView(name) {
+  els.studentListPanel.open = false;
+  window.scrollTo({ top: 0, behavior: "instant" });
   els.navButtons.forEach(button => {
     button.classList.toggle("active", button.dataset.view === name);
   });
@@ -724,7 +726,9 @@ async function showFollowups(studentId) {
 }
 
 async function showStudentDetail(id) {
+  els.studentListPanel.open = false;
   const student = await api(`/api/students/${id}`);
+  els.studentListPanel.open = false;
   state.selectedStudentId = id;
   const isArchived = Number(student.active) === 0;
   const documents = student.documents || [];
@@ -746,6 +750,8 @@ async function showStudentDetail(id) {
         </div>
       </div>
       <div class="detail-actions">
+        <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
+        <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
         ${isArchived ? `<span class="badge archived">Archived</span>` : `<span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>`}
         ${isArchived
           ? `<button class="primary-button" data-restore-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Restore student</button>`
@@ -1207,6 +1213,33 @@ async function submitStepAdjustment(form) {
   }
 }
 
+async function exportStudentHistory(button) {
+  button.disabled = true;
+  button.textContent = "Exporting...";
+  try {
+    const response = await fetch('/api/students/' + Number(button.dataset.exportHistory) + '/history.pdf');
+    if (!response.ok) {
+      if (response.status === 401) showLogin("Your session has expired. Sign in again.");
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || "Unable to export student history.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || "Student-Tech-History.pdf";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Export PDF";
+  }
+}
+
 function printTemplate(url) {
   const win = window.open(url, "_blank", "noopener");
   if (!win) return;
@@ -1416,6 +1449,9 @@ document.addEventListener("click", event => {
 
   const followupButton = event.target.closest("[data-followup-student-id]");
   if (followupButton) showFollowups(Number(followupButton.dataset.followupStudentId));
+
+  const exportButton = event.target.closest("[data-export-history]");
+  if (exportButton) void exportStudentHistory(exportButton);
 
   const printButton = event.target.closest("[data-print-template]");
   if (printButton) printTemplate(printButton.dataset.printTemplate);

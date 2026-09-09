@@ -7,6 +7,7 @@ require("dotenv").config();
 const { OAuth2Client } = require("google-auth-library");
 const initSqlJs = require("sql.js");
 const nodemailer = require("nodemailer");
+const { createStudentHistoryPdf, historyFilename } = require("./student-history-pdf.cjs");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
@@ -1454,7 +1455,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
-  const studentMatch = url.pathname.match(/^\/api\/students\/(\d+)$/);
+  const historyMatch = url.pathname.match(/^\/api\/students\/(\d+)\/history\.pdf$/);
+  const studentMatch = url.pathname.match(/^\/api\/students\/(\d+)$/) || historyMatch;
   if (req.method === "GET" && studentMatch) {
     const id = Number(studentMatch[1]);
     const student = statements.getStudent.get(id);
@@ -1465,7 +1467,7 @@ async function handleApi(req, res, url) {
     const { currentIncidents, previousIncidents } = splitIncidentsByTerm(incidents, term.id);
     const adjustments = statements.listAdjustmentsForStudent.all(id);
     const { currentAdjustments, previousAdjustments } = splitAdjustmentsByTerm(adjustments, term.id);
-    return sendJson(res, 200, {
+    const history = {
       ...student,
       counts,
       status: statusForStudent(id),
@@ -1477,10 +1479,22 @@ async function handleApi(req, res, url) {
       previousAdjustments,
       actions: statements.actionsForStudent.all(id),
       documents: statements.listDocumentsForStudent.all(id).map(documentView)
-    });
+    };
+    if (historyMatch) {
+      const pdf = await createStudentHistoryPdf(history, term);
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="' + historyFilename(student) + '"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Length": pdf.length
+      });
+      return res.end(pdf);
+    }
+    return sendJson(res, 200, history);
   }
 
-  if (req.method === "DELETE" && studentMatch) {
+  if (req.method === "DELETE" && studentMatch && !historyMatch) {
     const id = Number(studentMatch[1]);
     const student = statements.getStudent.get(id);
     if (!student) return sendJson(res, 404, { error: "Student not found" });
