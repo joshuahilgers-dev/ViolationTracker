@@ -252,10 +252,14 @@ function migrate() {
       class_period TEXT,
       severity TEXT NOT NULL CHECK (severity IN ('minor', 'major')),
       infraction_type_id INTEGER REFERENCES infraction_types(id),
+      entry_type TEXT NOT NULL DEFAULT 'violation' CHECK (entry_type IN ('violation', 'warning')),
       notes TEXT,
       canceled_at TEXT,
       canceled_by TEXT,
       canceled_reason TEXT,
+      converted_at TEXT,
+      converted_by TEXT,
+      conversion_reason TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -336,6 +340,10 @@ function migrate() {
   ensureColumn("incidents", "canceled_at", "TEXT");
   ensureColumn("incidents", "canceled_by", "TEXT");
   ensureColumn("incidents", "canceled_reason", "TEXT");
+  ensureColumn("incidents", "entry_type", "TEXT NOT NULL DEFAULT 'violation'");
+  ensureColumn("incidents", "converted_at", "TEXT");
+  ensureColumn("incidents", "converted_by", "TEXT");
+  ensureColumn("incidents", "conversion_reason", "TEXT");
   ensureColumn("infraction_types", "seed_key", "TEXT");
   ensureCurrentTerm();
   syncInfractionTypes();
@@ -365,11 +373,12 @@ function prepareStatements() {
   return {
   listStudents: prepare(`
     SELECT s.*,
-      COUNT(i.id) AS violation_count,
-      SUM(CASE WHEN i.severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
-      SUM(CASE WHEN i.severity = 'major' THEN 1 ELSE 0 END) AS major_count,
-      MAX(i.id) AS last_incident_id,
-      MAX(i.occurred_on) AS last_incident_on
+      SUM(CASE WHEN i.entry_type = 'violation' THEN 1 ELSE 0 END) AS violation_count,
+      SUM(CASE WHEN i.entry_type = 'violation' AND i.severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
+      SUM(CASE WHEN i.entry_type = 'violation' AND i.severity = 'major' THEN 1 ELSE 0 END) AS major_count,
+      SUM(CASE WHEN i.entry_type = 'warning' THEN 1 ELSE 0 END) AS warning_count,
+      MAX(CASE WHEN i.entry_type = 'violation' THEN i.id END) AS last_incident_id,
+      MAX(CASE WHEN i.entry_type = 'violation' THEN i.occurred_on END) AS last_incident_on
     FROM students s
     LEFT JOIN incidents i ON i.student_id = s.id AND i.term_id = ? AND i.canceled_at IS NULL
     WHERE s.active = 1
@@ -469,8 +478,8 @@ function prepareStatements() {
     WHERE severity = ? AND active = 1
   `),
   createIncident: prepare(`
-    INSERT INTO incidents (student_id, term_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO incidents (student_id, term_id, occurred_on, reported_by, class_period, severity, infraction_type_id, entry_type, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   incidentsForStudent: prepare(`
     SELECT i.*, t.category, t.label AS infraction_label, terms.name AS term_name, terms.started_on AS term_started_on
@@ -483,8 +492,17 @@ function prepareStatements() {
   incidentsForStatus: prepare(`
     SELECT id, severity, occurred_on
     FROM incidents
-    WHERE student_id = ? AND term_id = ? AND canceled_at IS NULL
+    WHERE student_id = ? AND term_id = ? AND entry_type = 'violation' AND canceled_at IS NULL
     ORDER BY occurred_on, id
+  `),
+  countCurrentWarningsByType: prepare(`
+    SELECT COUNT(*) AS count
+    FROM incidents
+    WHERE student_id = ?
+      AND term_id = ?
+      AND infraction_type_id = ?
+      AND entry_type = 'warning'
+      AND canceled_at IS NULL
   `),
   actionsForStudent: prepare(`
     SELECT *
@@ -538,6 +556,14 @@ function prepareStatements() {
     SET canceled_at = CURRENT_TIMESTAMP,
         canceled_by = ?,
         canceled_reason = ?
+    WHERE id = ?
+  `),
+  convertIncidentToWarning: prepare(`
+    UPDATE incidents
+    SET entry_type = 'warning',
+        converted_at = CURRENT_TIMESTAMP,
+        converted_by = ?,
+        conversion_reason = ?
     WHERE id = ?
   `),
   openActionsForStudent: prepare(`
@@ -599,10 +625,11 @@ function prepareStatements() {
   `),
   incidentCounts: prepare(`
     SELECT
-      COUNT(*) AS total_count,
-      SUM(CASE WHEN severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
-      SUM(CASE WHEN severity = 'major' THEN 1 ELSE 0 END) AS major_count,
-      MAX(occurred_on) AS last_incident_on
+      SUM(CASE WHEN entry_type = 'violation' THEN 1 ELSE 0 END) AS total_count,
+      SUM(CASE WHEN entry_type = 'violation' AND severity = 'minor' THEN 1 ELSE 0 END) AS minor_count,
+      SUM(CASE WHEN entry_type = 'violation' AND severity = 'major' THEN 1 ELSE 0 END) AS major_count,
+      SUM(CASE WHEN entry_type = 'warning' THEN 1 ELSE 0 END) AS warning_count,
+      MAX(CASE WHEN entry_type = 'violation' THEN occurred_on END) AS last_incident_on
     FROM incidents
     WHERE student_id = ? AND term_id = ? AND canceled_at IS NULL
   `),
@@ -795,6 +822,7 @@ function toStudentView(row) {
     violation_count: Number(row.violation_count || 0),
     minor_count: Number(row.minor_count || 0),
     major_count: Number(row.major_count || 0),
+    warning_count: Number(row.warning_count || 0),
     last_incident_id: Number(row.last_incident_id || 0),
     status: statusForStudent(row.id)
   };
@@ -863,10 +891,10 @@ function queueAction(studentId, incidentId, actionType, title, dueOn, owner, not
   statements.insertAction.run(studentId, incidentId, actionType, title, dueOn, owner, notes);
 }
 
-function reconcileOpenActionsAfterIncidentRemoval(studentId, incidentId, reason, todayText) {
+function reconcileOpenActionsAfterIncidentNoLongerCounts(studentId, incidentId, reason, todayText, changeDescription) {
   const currentStatus = statusForStudent(studentId);
-  const closeNote = `Closed after violation removal: ${reason}`;
-  const keepNote = `The triggering violation was removed: ${reason}. This follow-up remains open because the student's current step still requires it.`;
+  const closeNote = `Closed after the violation ${changeDescription}: ${reason}`;
+  const keepNote = `The triggering violation ${changeDescription}: ${reason}. This follow-up remains open because the student's current step still requires it.`;
 
   for (const action of statements.openActionsForStudent.all(studentId)) {
     const actionLevel = WORKFLOW_ACTION_LEVELS[action.action_type] || 0;
@@ -1681,7 +1709,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && incidentCancelMatch) {
     const incidentId = Number(incidentCancelMatch[1]);
     const incident = statements.getIncident.get(incidentId);
-    if (!incident) return sendJson(res, 404, { error: "Violation not found" });
+    if (!incident) return sendJson(res, 404, { error: "History entry not found" });
     if (incident.canceled_at) return sendJson(res, 200, { ok: true });
     const body = await readBody(req);
     const session = getSession(req);
@@ -1689,8 +1717,36 @@ async function handleApi(req, res, url) {
     const canceledBy = session?.email || session?.name || "Unknown";
     const todayText = new Date().toISOString().slice(0, 10);
     statements.cancelIncident.run(canceledBy, reason, incidentId);
-    const currentStatus = reconcileOpenActionsAfterIncidentRemoval(incident.student_id, incidentId, reason, todayText);
-    statements.addAudit.run("incident", incidentId, `Violation was removed by ${canceledBy}: ${reason}. Current step: ${currentStatus.label}.`);
+    const isWarning = incident.entry_type === "warning";
+    const currentStatus = isWarning
+      ? statusForStudent(incident.student_id)
+      : reconcileOpenActionsAfterIncidentNoLongerCounts(incident.student_id, incidentId, reason, todayText, "was removed");
+    const entryLabel = isWarning ? "Warning" : "Violation";
+    statements.addAudit.run("incident", incidentId, `${entryLabel} was removed by ${canceledBy}: ${reason}. Current step: ${currentStatus.label}.`);
+    return sendJson(res, 200, { ok: true, currentStatus });
+  }
+
+  const incidentWarningMatch = url.pathname.match(/^\/api\/incidents\/(\d+)\/convert-to-warning$/);
+  if (req.method === "POST" && incidentWarningMatch) {
+    const incidentId = Number(incidentWarningMatch[1]);
+    const incident = statements.getIncident.get(incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Violation not found" });
+    if (incident.canceled_at) return sendJson(res, 400, { error: "A removed violation cannot be converted to a warning." });
+    if (incident.entry_type === "warning") return sendJson(res, 200, { ok: true, currentStatus: statusForStudent(incident.student_id) });
+    const body = await readBody(req);
+    const reason = required(body.reason, "Conversion reason");
+    const session = getSession(req);
+    const convertedBy = session?.email || session?.name || "Unknown";
+    const todayText = new Date().toISOString().slice(0, 10);
+    statements.convertIncidentToWarning.run(convertedBy, reason, incidentId);
+    const currentStatus = reconcileOpenActionsAfterIncidentNoLongerCounts(
+      incident.student_id,
+      incidentId,
+      reason,
+      todayText,
+      "was converted to a warning"
+    );
+    statements.addAudit.run("incident", incidentId, `Violation was converted to a warning by ${convertedBy}: ${reason}. Current step: ${currentStatus.label}.`);
     return sendJson(res, 200, { ok: true, currentStatus });
   }
 
@@ -1700,7 +1756,7 @@ async function handleApi(req, res, url) {
     const student = statements.getStudent.get(studentId);
     if (!student) return sendJson(res, 404, { error: "Student not found" });
     if (Number(student.active) === 0) {
-      return sendJson(res, 400, { error: "Archived students must be restored before a new violation can be entered." });
+      return sendJson(res, 400, { error: "Archived students must be restored before a new violation or warning can be entered." });
     }
     const occurredOn = required(body.occurred_on, "Date");
     const reportedBy = required(body.reported_by, "Teacher or staff member");
@@ -1716,7 +1772,23 @@ async function handleApi(req, res, url) {
     if (infractionType.severity !== severity) {
       return sendJson(res, 400, { error: "The selected violation type does not match the chosen severity." });
     }
+    const entryType = String(body.entry_type || "violation").trim().toLowerCase();
+    if (!["violation", "warning"].includes(entryType)) {
+      return sendJson(res, 400, { error: "Entry type must be a violation or warning." });
+    }
     const term = currentTerm();
+    if (entryType === "warning") {
+      const priorWarningCount = Number(statements.countCurrentWarningsByType.get(studentId, term.id, infractionTypeId)?.count || 0);
+      if (priorWarningCount > 0 && body.confirm_repeat_warning !== true) {
+        return sendJson(res, 409, {
+          error: `This student already has a current-term warning for ${infractionType.label}.`,
+          code: "repeat_warning",
+          priorWarningCount,
+          infractionLabel: infractionType.label,
+          severity
+        });
+      }
+    }
     const previousStatus = statusForStudent(studentId);
     const result = statements.createIncident.run(
       studentId,
@@ -1726,15 +1798,18 @@ async function handleApi(req, res, url) {
       nullable(body.class_period),
       severity,
       infractionTypeId,
+      entryType,
       nullable(body.notes)
     );
     const currentStatus = statusForStudent(studentId);
-    ensureWorkflowActions(studentId, Number(result.lastInsertRowid), occurredOn, previousStatus, currentStatus);
-    statements.addAudit.run("incident", result.lastInsertRowid, `${severity} violation entered.`);
-    notifyTeamOfViolation(studentId).catch(error => {
-      statements.addAudit.run("email", result.lastInsertRowid, `Team notification email failed: ${error.message}`);
-    });
-    return sendJson(res, 201, { id: Number(result.lastInsertRowid) });
+    if (entryType === "violation") {
+      ensureWorkflowActions(studentId, Number(result.lastInsertRowid), occurredOn, previousStatus, currentStatus);
+      notifyTeamOfViolation(studentId).catch(error => {
+        statements.addAudit.run("email", result.lastInsertRowid, `Team notification email failed: ${error.message}`);
+      });
+    }
+    statements.addAudit.run("incident", result.lastInsertRowid, `${severity} ${entryType} entered.`);
+    return sendJson(res, 201, { id: Number(result.lastInsertRowid), entry_type: entryType, currentStatus });
   }
 
   if (req.method === "POST" && url.pathname === "/api/terms/start") {

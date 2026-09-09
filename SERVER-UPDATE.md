@@ -11,6 +11,9 @@ The school server's installation folder must be confirmed on the server; it may 
 - Student records include **Back to dashboard** and **Export PDF**.
 - The student header keeps common actions visible, moves student deletion into **More actions**, and no longer repeats the current-step badge.
 - Active current- and previous-term violations include **Remove violation**. A reason is required; the entry remains auditable, stops counting toward the student's step, and related open follow-ups are reconciled to the recalculated step.
+- Staff can record non-counting warnings from **New Tech Violation**. A repeated warning of the same type in the current term prompts staff to record the new occurrence as a violation or keep it as a warning.
+- Selecting a student on **New Tech Violation** displays current counts, matching-type records, and recent technology history before the entry is saved.
+- Active violations can be converted to warnings with a required reason. The history and audit trail remain intact while counts, intervention steps, and follow-ups are recalculated.
 - Settings can add, edit, and retire minor or major violation types. Retired types disappear from new-entry choices while existing history is preserved, and staff edits persist after server restarts.
 - PDFs contain current and previous-term history, notes, canceled entries, step adjustments, follow-ups, and an uploaded-document index. Uploaded files themselves are not embedded.
 - Empty violation, adjustment, follow-up, and document sections are omitted from PDFs.

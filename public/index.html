@@ -97,7 +97,7 @@
           <div class="page-heading">
             <div>
               <h2>New Tech Violation</h2>
-              <p>Enter the teacher report and the app will queue the next required step.</p>
+              <p>Record a violation that counts toward intervention steps or document a non-counting warning.</p>
             </div>
           </div>
           <form id="incident-form" class="form-grid panel">
@@ -114,6 +114,7 @@
               Date
               <input type="date" name="occurred_on" required>
             </label>
+            <section id="incident-history-summary" class="incident-history-summary full-width" aria-live="polite" hidden></section>
             <label>
               Teacher or staff member
               <input name="reported_by" autocomplete="name" required>
@@ -138,6 +139,17 @@
                 <option value="Off-site">Off-site</option>
               </select>
             </label>
+            <fieldset class="segmented-field entry-type-field">
+              <legend>Record as</legend>
+              <label>
+                <input type="radio" name="entry_type" value="violation" checked>
+                <span><strong>Violation</strong><small>Counts toward the student’s intervention step</small></span>
+              </label>
+              <label>
+                <input type="radio" name="entry_type" value="warning">
+                <span><strong>Warning</strong><small>Documented in history but does not count</small></span>
+              </label>
+            </fieldset>
             <fieldset class="segmented-field">
               <legend>Severity</legend>
               <label><input type="radio" name="severity" value="minor" checked> Minor</label>

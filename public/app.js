@@ -9,6 +9,8 @@ const state = {
   openActions: [],
   rolloverStudents: [],
   rolloverPreview: null,
+  incidentStudentHistory: null,
+  incidentHistoryRequest: 0,
   selectedStudentId: null,
   selectedFollowupStudentId: null,
   selectedStatusKey: null
@@ -54,6 +56,7 @@ const els = {
   incidentStudentSearch: document.querySelector("#incident-student-search"),
   incidentStudentSelect: document.querySelector("#incident-student-select"),
   incidentStudentOptions: document.querySelector("#incident-student-options"),
+  incidentHistorySummary: document.querySelector("#incident-history-summary"),
   studentForm: document.querySelector("#student-form"),
   studentMessage: document.querySelector("#student-message"),
   csvImportForm: document.querySelector("#csv-import-form"),
@@ -112,7 +115,13 @@ async function api(path, options = {}) {
   if (response.status === 401 && path !== "/api/auth/me") {
     showLogin("Your session has expired. Sign in again.");
   }
-  if (!response.ok) throw new Error(body.error || "Request failed");
+  if (!response.ok) {
+    const error = new Error(body.error || "Request failed");
+    error.status = response.status;
+    error.code = body.code;
+    error.details = body;
+    throw error;
+  }
   return body;
 }
 
@@ -201,6 +210,7 @@ async function loadBootstrap() {
   state.infractionTypes = data.infractionTypes;
   state.templates = data.templates || [];
   state.openActions = data.openActions;
+  state.incidentStudentHistory = null;
   renderAll();
   populateReporterEmail();
 }
@@ -310,6 +320,7 @@ function updateIncidentStudentOptions() {
   const selected = state.students.find(student => studentOptionLabel(student) === query);
   els.incidentForm.elements.student_id.value = selected ? selected.id : "";
   els.incidentStudentSelect.value = selected ? String(selected.id) : "";
+  loadIncidentStudentHistory(selected?.id);
 }
 
 function selectIncidentStudent(studentId) {
@@ -320,6 +331,111 @@ function selectIncidentStudent(studentId) {
   updateIncidentStudentOptions();
 }
 
+function incidentEntryType(incident) {
+  return incident.entry_type === "warning" ? "warning" : "violation";
+}
+
+function quickHistoryRow(incident) {
+  const entryType = incidentEntryType(incident);
+  const label = entryType === "warning" ? "Warning" : `${incident.severity === "major" ? "Major" : "Minor"} violation`;
+  return `
+    <li class="quick-history-row ${incident.canceled_at ? "canceled" : ""}">
+      <span class="quick-history-kind ${entryType}">${label}</span>
+      <strong>${escapeHtml(incident.infraction_label || "Uncategorized")}</strong>
+      <span>${escapeHtml(formatDate(incident.occurred_on))}${incident.term_name ? ` · ${escapeHtml(incident.term_name)}` : ""}</span>
+      ${incident.canceled_at ? `<span class="canceled-badge">Removed</span>` : ""}
+    </li>
+  `;
+}
+
+function renderIncidentHistorySummary() {
+  const student = state.incidentStudentHistory;
+  if (!student) {
+    els.incidentHistorySummary.hidden = true;
+    els.incidentHistorySummary.innerHTML = "";
+    return;
+  }
+
+  const incidents = student.incidents || [];
+  const currentIncidents = student.currentIncidents || [];
+  const activeCurrent = currentIncidents.filter(incident => !incident.canceled_at);
+  const currentWarnings = activeCurrent.filter(incident => incidentEntryType(incident) === "warning");
+  const currentViolations = activeCurrent.filter(incident => incidentEntryType(incident) === "violation");
+  const selectedTypeId = Number(els.incidentForm.elements.infraction_type_id.value || 0);
+  const selectedType = state.infractionTypes.find(type => Number(type.id) === selectedTypeId);
+  const matching = selectedTypeId
+    ? incidents.filter(incident => Number(incident.infraction_type_id) === selectedTypeId)
+    : [];
+  const matchingCurrentWarnings = matching.filter(incident =>
+    Number(incident.term_id) === Number(state.currentTerm?.id)
+      && incidentEntryType(incident) === "warning"
+      && !incident.canceled_at
+  );
+  const recent = incidents.slice(0, 4);
+
+  els.incidentHistorySummary.hidden = false;
+  els.incidentHistorySummary.innerHTML = `
+    <div class="quick-history-heading">
+      <div>
+        <h3>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}: history at a glance</h3>
+        <p>Review recent and matching records before saving this entry.</p>
+      </div>
+      <button type="button" class="quiet-button compact-button" data-student-id="${student.id}">View full history</button>
+    </div>
+    <div class="quick-history-stats">
+      <span><strong>${currentViolations.length}</strong> current-term violation${currentViolations.length === 1 ? "" : "s"}</span>
+      <span><strong>${currentWarnings.length}</strong> current-term warning${currentWarnings.length === 1 ? "" : "s"}</span>
+      <span><strong>${escapeHtml(student.status?.label || "No violations")}</strong> current step</span>
+    </div>
+    <div class="quick-history-grid">
+      <section>
+        <h4>Similar type: ${escapeHtml(selectedType?.label || "Choose a type")}</h4>
+        ${matching.length
+          ? `<ul class="quick-history-list">${matching.slice(0, 3).map(quickHistoryRow).join("")}</ul>`
+          : `<p class="quick-history-empty">No previous records for this type.</p>`}
+        ${matchingCurrentWarnings.length
+          ? `<p class="repeat-warning-note"><strong>${matchingCurrentWarnings.length} current-term warning${matchingCurrentWarnings.length === 1 ? "" : "s"}</strong> already recorded for this type.</p>`
+          : ""}
+      </section>
+      <section>
+        <h4>Most recent history</h4>
+        ${recent.length
+          ? `<ul class="quick-history-list">${recent.map(quickHistoryRow).join("")}</ul>`
+          : `<p class="quick-history-empty">No warnings or violations recorded.</p>`}
+      </section>
+    </div>
+  `;
+}
+
+async function loadIncidentStudentHistory(studentId) {
+  const id = Number(studentId || 0);
+  if (!id) {
+    state.incidentHistoryRequest += 1;
+    state.incidentStudentHistory = null;
+    renderIncidentHistorySummary();
+    return;
+  }
+  if (Number(state.incidentStudentHistory?.id) === id) {
+    renderIncidentHistorySummary();
+    return;
+  }
+
+  const requestId = ++state.incidentHistoryRequest;
+  els.incidentHistorySummary.hidden = false;
+  els.incidentHistorySummary.innerHTML = `<p class="quick-history-empty">Loading student history...</p>`;
+  try {
+    const student = await api(`/api/students/${id}`);
+    if (requestId !== state.incidentHistoryRequest || Number(els.incidentForm.elements.student_id.value) !== id) return;
+    state.incidentStudentHistory = student;
+    renderIncidentHistorySummary();
+  } catch (error) {
+    if (requestId !== state.incidentHistoryRequest) return;
+    state.incidentStudentHistory = null;
+    els.incidentHistorySummary.hidden = false;
+    els.incidentHistorySummary.innerHTML = `<p class="quick-history-error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
 function renderInfractionOptions() {
   const severity = els.incidentForm.elements.severity.value;
   const select = els.incidentForm.elements.infraction_type_id;
@@ -327,6 +443,7 @@ function renderInfractionOptions() {
     .filter(type => type.severity === severity)
     .map(type => `<option value="${type.id}">${escapeHtml(type.label)}</option>`);
   select.innerHTML = options.join("");
+  renderIncidentHistorySummary();
 }
 
 function renderDashboardActions() {
@@ -391,6 +508,7 @@ function renderStudents() {
             <span>${student.violation_count} total</span>
             <span>${student.minor_count} minor</span>
             <span>${student.major_count} major</span>
+            ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
           </div>
         </div>
         <button class="quiet-button" data-student-id="${student.id}">Review</button>
@@ -704,6 +822,7 @@ function statusStudentRow(student, key) {
           <span>${student.violation_count} total</span>
           <span>${student.minor_count} minor</span>
           <span>${student.major_count} major</span>
+          ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
         </div>
       </div>
       <div class="row-actions">
@@ -715,16 +834,23 @@ function statusStudentRow(student, key) {
 }
 
 function incidentRows(incidents, allowRemoval = true) {
-  return incidents.length ? incidents.map(incident => `
-    <article class="incident-row ${incident.canceled_at ? "canceled" : ""}">
+  return incidents.length ? incidents.map(incident => {
+    const entryType = incidentEntryType(incident);
+    const entryLabel = entryType === "warning" ? "Warning" : `${incident.severity} violation`;
+    return `
+    <article class="incident-row ${entryType === "warning" ? "warning" : ""} ${incident.canceled_at ? "canceled" : ""}">
       <div class="incident-heading">
         <h4>
-          ${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
+          ${escapeHtml(incident.occurred_on)}: ${escapeHtml(entryLabel)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
+          ${entryType === "warning" ? `<span class="warning-badge">Does not count</span>` : ""}
           ${incident.canceled_at ? `<span class="canceled-badge">Removed</span>` : ""}
         </h4>
-        ${allowRemoval && !incident.canceled_at
-          ? `<button class="danger-button compact-button" data-cancel-incident="${incident.id}">Remove violation</button>`
-          : ""}
+        ${allowRemoval && !incident.canceled_at ? `
+          <div class="row-actions">
+            ${entryType === "violation" ? `<button class="quiet-button compact-button" data-convert-incident="${incident.id}">Convert to warning</button>` : ""}
+            <button class="danger-button compact-button" data-cancel-incident="${incident.id}" data-entry-type="${entryType}">Remove ${entryType}</button>
+          </div>
+        ` : ""}
       </div>
       <div class="meta">
         <span>Reported by ${escapeHtml(incident.reported_by)}</span>
@@ -732,11 +858,14 @@ function incidentRows(incidents, allowRemoval = true) {
         ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
         ${incident.term_name ? `<span>${escapeHtml(incident.term_name)}</span>` : ""}
         ${incident.canceled_by ? `<span>Removed by ${escapeHtml(incident.canceled_by)}</span>` : ""}
+        ${incident.converted_by ? `<span>Converted by ${escapeHtml(incident.converted_by)}</span>` : ""}
       </div>
       ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
+      ${incident.conversion_reason ? `<p><strong>Conversion reason:</strong> ${escapeHtml(incident.conversion_reason)}</p>` : ""}
       ${incident.canceled_reason ? `<p><strong>Removal reason:</strong> ${escapeHtml(incident.canceled_reason)}</p>` : ""}
     </article>
-  `).join("") : `<div class="empty">No violations recorded.</div>`;
+  `;
+  }).join("") : `<div class="empty">No warnings or violations recorded.</div>`;
 }
 
 function profileDocumentCard(document) {
@@ -880,16 +1009,17 @@ async function showStudentDetail(id) {
     </div>
     ${isArchived ? `
       <div class="archived-note">
-        This student is archived and hidden from active workflows. Restore the student to enter new violations or include them in active lists.
+        This student is archived and hidden from active workflows. Restore the student to enter new violations or warnings or include them in active lists.
       </div>
     ` : ""}
     <div class="detail-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
       <div class="detail-stat"><span>Major</span><strong>${Number(student.counts.major_count || 0)}</strong></div>
+      <div class="detail-stat"><span>Warnings</span><strong>${Number(student.counts.warning_count || 0)}</strong></div>
       <div class="detail-stat"><span>Parent/guardian</span><strong>${escapeHtml(student.guardian_name || "Not set")}</strong></div>
       <div class="detail-stat"><span>Contact</span><strong>${escapeHtml(student.guardian_contact || "Not set")}</strong></div>
-      <div class="detail-stat"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
+      <div class="detail-stat ${isArchived ? "" : "full-width"}"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
       ${isArchived ? `<div class="detail-stat full-width"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>` : ""}
     </div>
     ${isArchived ? "" : `
@@ -898,7 +1028,7 @@ async function showStudentDetail(id) {
         ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
       </div>
     `}
-    <h4 class="section-title">Violation History: Current Term</h4>
+    <h4 class="section-title">Technology History: Current Term</h4>
     <div class="timeline">
       ${incidentRows(currentIncidents, !isArchived)}
     </div>
@@ -907,7 +1037,7 @@ async function showStudentDetail(id) {
       ${adjustmentRows(currentAdjustments)}
     </div>
     <details class="history-details">
-      <summary>Violation History: Previous Terms (${previousIncidents.length})</summary>
+      <summary>Technology History: Previous Terms (${previousIncidents.length})</summary>
       <div class="timeline">
         ${incidentRows(previousIncidents, !isArchived)}
       </div>
@@ -1235,15 +1365,15 @@ async function createIncident(event) {
   }
   const form = new FormData(formElement);
   const payload = Object.fromEntries(form.entries());
-  const originalText = submitButton.textContent;
   submitButton.disabled = true;
   submitButton.textContent = "Saving...";
   els.incidentMessage.textContent = "Saving...";
   try {
-    await api("/api/incidents", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    const result = await saveIncidentWithRepeatWarningPrompt(payload);
+    if (!result) {
+      els.incidentMessage.textContent = "Entry not saved. Review the form and try again.";
+      return;
+    }
     formElement.reset();
     els.incidentForm.elements.student_id.value = "";
     els.incidentStudentSelect.value = "";
@@ -1251,15 +1381,82 @@ async function createIncident(event) {
     els.incidentForm.elements.occurred_on.value = today();
     populateReporterEmail();
     renderInfractionOptions();
+    updateIncidentEntryTypeUi();
     await loadBootstrap();
-    els.incidentMessage.textContent = "Saved. Next steps were queued.";
+    els.incidentMessage.textContent = result.entry_type === "warning"
+      ? "Warning saved. It is documented in history and does not count toward the intervention step."
+      : "Violation saved. The student's intervention step has been updated.";
     setTimeout(() => { els.incidentMessage.textContent = ""; }, 4000);
   } catch (error) {
     els.incidentMessage.textContent = error.message;
   } finally {
     submitButton.disabled = false;
-    submitButton.textContent = originalText;
+    updateIncidentEntryTypeUi();
   }
+}
+
+function repeatWarningDecision(details) {
+  return new Promise(resolve => {
+    const dialog = document.createElement("dialog");
+    const priorCount = Number(details.priorWarningCount || 1);
+    const severity = details.severity === "major" ? "major" : "minor";
+    dialog.className = "decision-dialog";
+    dialog.innerHTML = `
+      <form method="dialog">
+        <h3>Previous warning found</h3>
+        <p>This student already has ${priorCount} current-term warning${priorCount === 1 ? "" : "s"} for <strong>${escapeHtml(details.infractionLabel || "this type")}</strong>.</p>
+        <p>How should this occurrence be recorded?</p>
+        <div class="decision-actions">
+          <button type="button" class="primary-button" data-warning-decision="violation">Record ${severity} violation</button>
+          <button type="button" class="quiet-button" data-warning-decision="warning">Keep as warning</button>
+          <button type="button" class="quiet-button" data-warning-decision="back">Go back</button>
+        </div>
+      </form>
+    `;
+    const finish = decision => {
+      dialog.close();
+      dialog.remove();
+      resolve(decision);
+    };
+    dialog.addEventListener("click", event => {
+      const button = event.target.closest("[data-warning-decision]");
+      if (button) finish(button.dataset.warningDecision);
+    });
+    dialog.addEventListener("cancel", event => {
+      event.preventDefault();
+      finish("back");
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+async function saveIncidentWithRepeatWarningPrompt(payload) {
+  try {
+    return await api("/api/incidents", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    if (error.code !== "repeat_warning") throw error;
+    const decision = await repeatWarningDecision(error.details || {});
+    if (decision === "back") return null;
+    if (decision === "violation") {
+      payload.entry_type = "violation";
+    } else {
+      payload.confirm_repeat_warning = true;
+    }
+    return api("/api/incidents", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
+}
+
+function updateIncidentEntryTypeUi() {
+  const entryType = els.incidentForm.elements.entry_type.value;
+  const submitButton = els.incidentForm.querySelector("button[type='submit']");
+  submitButton.textContent = entryType === "warning" ? "Save warning" : "Save violation";
 }
 
 async function completeAction(id) {
@@ -1293,8 +1490,9 @@ async function completeAction(id) {
   }
 }
 
-async function cancelIncident(id) {
-  const reason = window.prompt("Remove this violation? It will remain in the student's history as removed, but it will no longer count toward intervention steps. Enter a reason:");
+async function cancelIncident(id, entryType = "violation") {
+  const label = entryType === "warning" ? "warning" : "violation";
+  const reason = window.prompt(`Remove this ${label}? It will remain in the student's history as removed. Enter a reason:`);
   if (reason === null) return;
   if (!reason.trim()) {
     window.alert("Enter a reason before removing the violation.");
@@ -1302,6 +1500,26 @@ async function cancelIncident(id) {
   }
   try {
     await api(`/api/incidents/${id}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason.trim() })
+    });
+    await loadBootstrap();
+    if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+async function convertIncidentToWarning(id) {
+  const reason = window.prompt("Convert this violation to a warning? It will remain in history but stop counting toward intervention steps. Enter a reason:");
+  if (reason === null) return;
+  if (!reason.trim()) {
+    window.alert("Enter a reason before converting the violation.");
+    return;
+  }
+  try {
+    await api(`/api/incidents/${id}/convert-to-warning`, {
       method: "POST",
       body: JSON.stringify({ reason: reason.trim() })
     });
@@ -1462,7 +1680,7 @@ async function deleteTemplate(actionType, label) {
 }
 
 async function deleteStudent(id, name) {
-  const confirmed = window.confirm(`Delete ${name} and all related violations/actions? This cannot be undone.`);
+  const confirmed = window.confirm(`Delete ${name} and all related technology history and actions? This cannot be undone.`);
   if (!confirmed) return;
   await api(`/api/students/${id}`, {
     method: "DELETE",
@@ -1475,7 +1693,7 @@ async function deleteStudent(id, name) {
 }
 
 async function clearAllStudents() {
-  const phrase = window.prompt("This will delete every student plus all violation history and action items. Type DELETE ALL STUDENTS to continue.");
+  const phrase = window.prompt("This will delete every student plus all warning, violation, and action history. Type DELETE ALL STUDENTS to continue.");
   if (phrase !== "DELETE ALL STUDENTS") return;
   await api("/api/students", {
     method: "DELETE",
@@ -1488,7 +1706,7 @@ async function clearAllStudents() {
 }
 
 async function startNewTerm() {
-  const phrase = window.prompt("This will move current-term violations into Previous Terms and reset active counts/follow-ups. Type START NEW TERM to continue.");
+  const phrase = window.prompt("This will move current-term warnings and violations into Previous Terms and reset active counts/follow-ups. Type START NEW TERM to continue.");
   if (phrase !== "START NEW TERM") return;
   const name = window.prompt("Name this new term. Leave blank to use today's date.") || "";
   els.termMessage.textContent = "Starting new term...";
@@ -1567,7 +1785,12 @@ document.addEventListener("click", event => {
   if (completeButton) completeAction(Number(completeButton.dataset.completeAction));
 
   const cancelIncidentButton = event.target.closest("[data-cancel-incident]");
-  if (cancelIncidentButton) cancelIncident(Number(cancelIncidentButton.dataset.cancelIncident));
+  if (cancelIncidentButton) {
+    cancelIncident(Number(cancelIncidentButton.dataset.cancelIncident), cancelIncidentButton.dataset.entryType);
+  }
+
+  const convertIncidentButton = event.target.closest("[data-convert-incident]");
+  if (convertIncidentButton) convertIncidentToWarning(Number(convertIncidentButton.dataset.convertIncident));
 
   const adjustStepButton = event.target.closest("[data-toggle-step-adjust]");
   if (adjustStepButton) {
@@ -1655,6 +1878,8 @@ els.templateForm.addEventListener("submit", uploadTemplate);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();
+  if (event.target.name === "entry_type") updateIncidentEntryTypeUi();
+  if (event.target.name === "infraction_type_id") renderIncidentHistorySummary();
 });
 els.incidentStudentSearch.addEventListener("input", updateIncidentStudentOptions);
 els.incidentStudentSearch.addEventListener("change", updateIncidentStudentOptions);
@@ -1663,6 +1888,7 @@ els.incidentStudentSelect.addEventListener("change", event => {
 });
 
 els.incidentForm.elements.occurred_on.value = today();
+updateIncidentEntryTypeUi();
 loadAuth().catch(error => {
   document.body.innerHTML = `<main class="content"><div class="panel"><h2>Unable to start</h2><p>${escapeHtml(error.message)}</p></div></main>`;
 });

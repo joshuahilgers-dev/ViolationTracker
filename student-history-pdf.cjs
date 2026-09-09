@@ -52,13 +52,18 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
     function incidents(title, rows) {
       if (!rows.length) return;
       section(title);
-      for (const incident of rows) record(
-        `${incident.occurred_on} | ${incident.severity} | ${incident.infraction_label || "Uncategorized"}${incident.canceled_at ? " [CANCELED]" : ""}`,
-        [incident.term_name && `Term: ${incident.term_name}`, `Reported by: ${incident.reported_by || "Not recorded"}`,
-          incident.class_period && `Class period: ${incident.class_period}`, incident.category && `Category: ${incident.category}`,
-          incident.canceled_at && `Canceled: ${incident.canceled_at}${incident.canceled_by ? ` by ${incident.canceled_by}` : ""}`,
-          incident.canceled_reason && `Cancellation reason: ${incident.canceled_reason}`],
-        incident.notes && `Notes: ${incident.notes}`);
+      for (const incident of rows) {
+        const entryLabel = incident.entry_type === "warning" ? "WARNING" : `${String(incident.severity || "").toUpperCase()} VIOLATION`;
+        record(
+          `${incident.occurred_on} | ${entryLabel} | ${incident.infraction_label || "Uncategorized"}${incident.canceled_at ? " [REMOVED]" : ""}`,
+          [incident.term_name && `Term: ${incident.term_name}`, `Reported by: ${incident.reported_by || "Not recorded"}`,
+            incident.class_period && `Class period: ${incident.class_period}`, incident.category && `Category: ${incident.category}`,
+            incident.converted_at && `Converted to warning: ${incident.converted_at}${incident.converted_by ? ` by ${incident.converted_by}` : ""}`,
+            incident.conversion_reason && `Conversion reason: ${incident.conversion_reason}`,
+            incident.canceled_at && `Removed: ${incident.canceled_at}${incident.canceled_by ? ` by ${incident.canceled_by}` : ""}`,
+            incident.canceled_reason && `Removal reason: ${incident.canceled_reason}`],
+          incident.notes && `Notes: ${incident.notes}`);
+      }
     }
     function adjustments(title, rows) {
       if (!rows.length) return;
@@ -76,15 +81,17 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
     line(`Student ID: ${student.student_number || "Not set"} | Grade: ${student.grade || "Not set"} | Device: ${student.device_asset_tag || "Not set"}`);
     line(`Generated: ${now.toLocaleString("en-US", { timeZone: "America/Chicago", timeZoneName: "short" })}`);
     line(`Current term: ${term.name || term.started_on || "Current term"}`);
-    line("Scope: all recorded terms, including canceled entries. Canceled entries do not count toward intervention steps.");
+    line("Scope: all recorded terms, including warnings and removed entries. Warnings and removed entries do not count toward intervention steps.");
     if (Number(student.active) === 0) {
       line(`Archived: ${student.archived_at || "Date not recorded"}`);
       if (student.archived_reason) line(`Archive reason: ${student.archived_reason}`);
     }
     line(`Current step: ${student.status.label}`);
-    line(`Current-term counts: ${student.counts.total_count || 0} total | ${student.counts.minor_count || 0} minor | ${student.counts.major_count || 0} major`);
-    incidents("Violation History: Current Term", student.currentIncidents);
-    incidents("Violation History: Previous Terms", student.previousIncidents);
+    const violationCount = Number(student.counts.total_count || 0);
+    const warningCount = Number(student.counts.warning_count || 0);
+    line(`Current-term counts: ${violationCount} violation${violationCount === 1 ? "" : "s"} | ${student.counts.minor_count || 0} minor | ${student.counts.major_count || 0} major | ${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+    incidents("Technology History: Current Term", student.currentIncidents);
+    incidents("Technology History: Previous Terms", student.previousIncidents);
     adjustments("Administrative Step Adjustments: Current Term", student.currentAdjustments);
     adjustments("Administrative Step Adjustments: Previous Terms", student.previousAdjustments);
     if (student.actions.length) {
