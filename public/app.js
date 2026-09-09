@@ -442,7 +442,7 @@ function followupStudentCard(group) {
         <div class="meta">${escapeHtml(titles)}</div>
       </div>
       <div class="row-actions">
-        ${group.incident_id ? `<button class="danger-button" data-cancel-incident="${group.incident_id}">Cancel Entry</button>` : ""}
+        ${group.incident_id ? `<button class="danger-button" data-cancel-incident="${group.incident_id}">Remove violation</button>` : ""}
         <button class="primary-button" data-followup-student-id="${group.student_id}">Review</button>
       </div>
     </article>
@@ -610,22 +610,27 @@ function statusStudentRow(student, key) {
   `;
 }
 
-function incidentRows(incidents) {
+function incidentRows(incidents, allowRemoval = true) {
   return incidents.length ? incidents.map(incident => `
     <article class="incident-row ${incident.canceled_at ? "canceled" : ""}">
-      <h4>
-        ${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
-        ${incident.canceled_at ? `<span class="canceled-badge">Canceled</span>` : ""}
-      </h4>
+      <div class="incident-heading">
+        <h4>
+          ${escapeHtml(incident.occurred_on)}: ${escapeHtml(incident.severity)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
+          ${incident.canceled_at ? `<span class="canceled-badge">Removed</span>` : ""}
+        </h4>
+        ${allowRemoval && !incident.canceled_at
+          ? `<button class="danger-button compact-button" data-cancel-incident="${incident.id}">Remove violation</button>`
+          : ""}
+      </div>
       <div class="meta">
         <span>Reported by ${escapeHtml(incident.reported_by)}</span>
         ${incident.class_period ? `<span>Period ${escapeHtml(incident.class_period)}</span>` : ""}
         ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
         ${incident.term_name ? `<span>${escapeHtml(incident.term_name)}</span>` : ""}
-        ${incident.canceled_by ? `<span>Canceled by ${escapeHtml(incident.canceled_by)}</span>` : ""}
+        ${incident.canceled_by ? `<span>Removed by ${escapeHtml(incident.canceled_by)}</span>` : ""}
       </div>
       ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
-      ${incident.canceled_reason ? `<p>${escapeHtml(incident.canceled_reason)}</p>` : ""}
+      ${incident.canceled_reason ? `<p><strong>Removal reason:</strong> ${escapeHtml(incident.canceled_reason)}</p>` : ""}
     </article>
   `).join("") : `<div class="empty">No violations recorded.</div>`;
 }
@@ -750,12 +755,23 @@ async function showStudentDetail(id) {
         </div>
       </div>
       <div class="detail-actions">
-        <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
-        <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
-        ${isArchived ? `<span class="badge archived">Archived</span>` : `<span class="badge ${student.status.key}">${escapeHtml(student.status.label)}</span>`}
-        ${isArchived
-          ? `<button class="primary-button" data-restore-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Restore student</button>`
-          : `<button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>`}
+        <div class="detail-primary-actions">
+          <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
+          <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
+        </div>
+        ${isArchived ? `
+          <div class="detail-state-actions">
+            <span class="badge archived">Archived</span>
+            <button class="primary-button" data-restore-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Restore student</button>
+          </div>
+        ` : `
+          <details class="record-actions-menu">
+            <summary class="quiet-button">More actions</summary>
+            <div class="record-actions-popover">
+              <button class="danger-button" data-delete-student="${student.id}" data-student-name="${escapeHtml(`${student.first_name} ${student.last_name}`)}">Delete student</button>
+            </div>
+          </details>
+        `}
       </div>
     </div>
     ${isArchived ? `
@@ -780,7 +796,7 @@ async function showStudentDetail(id) {
     `}
     <h4 class="section-title">Violation History: Current Term</h4>
     <div class="timeline">
-      ${incidentRows(currentIncidents)}
+      ${incidentRows(currentIncidents, !isArchived)}
     </div>
     <h4 class="section-title">Administrative Step Adjustments: Current Term</h4>
     <div class="timeline">
@@ -789,7 +805,7 @@ async function showStudentDetail(id) {
     <details class="history-details">
       <summary>Violation History: Previous Terms (${previousIncidents.length})</summary>
       <div class="timeline">
-        ${incidentRows(previousIncidents)}
+        ${incidentRows(previousIncidents, !isArchived)}
       </div>
     </details>
     <details class="history-details">
@@ -1174,15 +1190,23 @@ async function completeAction(id) {
 }
 
 async function cancelIncident(id) {
-  const reason = window.prompt("Cancel this violation entry? It will stay in the student history but will no longer count toward steps. Optional reason:");
+  const reason = window.prompt("Remove this violation? It will remain in the student's history as removed, but it will no longer count toward intervention steps. Enter a reason:");
   if (reason === null) return;
-  await api(`/api/incidents/${id}/cancel`, {
-    method: "POST",
-    body: JSON.stringify({ reason })
-  });
-  await loadBootstrap();
-  if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
-  if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  if (!reason.trim()) {
+    window.alert("Enter a reason before removing the violation.");
+    return;
+  }
+  try {
+    await api(`/api/incidents/${id}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason.trim() })
+    });
+    await loadBootstrap();
+    if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    window.alert(error.message);
+  }
 }
 
 async function submitStepAdjustment(form) {

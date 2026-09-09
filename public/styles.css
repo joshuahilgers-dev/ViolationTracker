@@ -512,6 +512,24 @@ button {
   background: #f8fafc;
 }
 
+.incident-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.incident-heading h4 {
+  min-width: 0;
+}
+
+.compact-button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  font-size: 0.84rem;
+}
+
 .new-badge {
   display: inline-flex;
   align-items: center;
@@ -656,6 +674,48 @@ textarea {
   gap: 10px;
   align-items: center;
   justify-content: flex-end;
+}
+
+.detail-primary-actions,
+.detail-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.record-actions-menu {
+  position: relative;
+}
+
+.record-actions-menu > summary {
+  list-style: none;
+  user-select: none;
+}
+
+.record-actions-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.record-actions-menu[open] > summary {
+  border-color: #94a3b8;
+}
+
+.record-actions-popover {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 170px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.record-actions-popover .danger-button {
+  width: 100%;
 }
 
 .detail-grid {
@@ -860,6 +920,19 @@ textarea {
   .action-row,
   .list-row {
     display: grid;
+  }
+
+  .detail-actions {
+    justify-content: start;
+  }
+
+  .incident-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .incident-heading .compact-button {
+    align-self: start;
   }
 
   .compact-heading input {

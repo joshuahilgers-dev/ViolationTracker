@@ -523,7 +523,13 @@ function prepareStatements() {
         canceled_reason = ?
     WHERE id = ?
   `),
-  closeOpenActionsForIncident: prepare(`
+  openActionsForStudent: prepare(`
+    SELECT *
+    FROM actions
+    WHERE student_id = ? AND status = 'open'
+    ORDER BY id
+  `),
+  closeOpenActionForRemoval: prepare(`
     UPDATE actions
     SET status = 'complete',
         completed_on = ?,
@@ -531,7 +537,16 @@ function prepareStatements() {
           WHEN notes IS NULL OR notes = '' THEN ?
           ELSE notes || ' ' || ?
         END
-    WHERE incident_id = ? AND status = 'open'
+    WHERE id = ? AND status = 'open'
+  `),
+  detachOpenActionFromIncident: prepare(`
+    UPDATE actions
+    SET incident_id = NULL,
+        notes = CASE
+          WHEN notes IS NULL OR notes = '' THEN ?
+          ELSE notes || ' ' || ?
+        END
+    WHERE id = ? AND status = 'open'
   `),
   nextReturnActionForStudent: prepare(`
     SELECT *
@@ -700,6 +715,18 @@ const STATUS_DETAILS = {
   }
 };
 
+const WORKFLOW_ACTION_LEVELS = {
+  digital_reflection: 2,
+  parent_contact_reflection: 2,
+  success_contract: 3,
+  parent_contact_contract: 3,
+  device_restriction: 4,
+  reentry_check: 4,
+  return_chromebook: 4,
+  admin_review: 5,
+  parent_contact_admin: 5
+};
+
 function statusFromIncidentHistory(incidents) {
   let key = "no_violations";
   let minorCount = 0;
@@ -817,6 +844,24 @@ function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus
 
 function queueAction(studentId, incidentId, actionType, title, dueOn, owner, notes) {
   statements.insertAction.run(studentId, incidentId, actionType, title, dueOn, owner, notes);
+}
+
+function reconcileOpenActionsAfterIncidentRemoval(studentId, incidentId, reason, todayText) {
+  const currentStatus = statusForStudent(studentId);
+  const closeNote = `Closed after violation removal: ${reason}`;
+  const keepNote = `The triggering violation was removed: ${reason}. This follow-up remains open because the student's current step still requires it.`;
+
+  for (const action of statements.openActionsForStudent.all(studentId)) {
+    const actionLevel = WORKFLOW_ACTION_LEVELS[action.action_type] || 0;
+    const belongsToRemovedIncident = Number(action.incident_id) === Number(incidentId);
+    if (actionLevel > currentStatus.level) {
+      statements.closeOpenActionForRemoval.run(todayText, closeNote, closeNote, action.id);
+    } else if (belongsToRemovedIncident) {
+      statements.detachOpenActionFromIncident.run(keepNote, keepNote, action.id);
+    }
+  }
+
+  return currentStatus;
 }
 
 function parseEmailList(value) {
@@ -1550,14 +1595,13 @@ async function handleApi(req, res, url) {
     if (incident.canceled_at) return sendJson(res, 200, { ok: true });
     const body = await readBody(req);
     const session = getSession(req);
-    const reason = nullable(body.reason) || "Canceled from follow-up review.";
+    const reason = required(body.reason, "Removal reason");
     const canceledBy = session?.email || session?.name || "Unknown";
     const todayText = new Date().toISOString().slice(0, 10);
-    const actionNote = `Canceled violation: ${reason}`;
     statements.cancelIncident.run(canceledBy, reason, incidentId);
-    statements.closeOpenActionsForIncident.run(todayText, actionNote, actionNote, incidentId);
-    statements.addAudit.run("incident", incidentId, `Violation was canceled by ${canceledBy}.`);
-    return sendJson(res, 200, { ok: true });
+    const currentStatus = reconcileOpenActionsAfterIncidentRemoval(incident.student_id, incidentId, reason, todayText);
+    statements.addAudit.run("incident", incidentId, `Violation was removed by ${canceledBy}: ${reason}. Current step: ${currentStatus.label}.`);
+    return sendJson(res, 200, { ok: true, currentStatus });
   }
 
   if (req.method === "POST" && url.pathname === "/api/incidents") {

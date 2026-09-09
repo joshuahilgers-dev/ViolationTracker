@@ -9,6 +9,8 @@ The school server's installation folder must be confirmed on the server; it may 
 - Navigation and quick action say **New Tech Violation** and **Add Tech Violation**.
 - The student list starts collapsed and collapses on navigation and student review. It can still open for searching.
 - Student records include **Back to dashboard** and **Export PDF**.
+- The student header keeps common actions visible, moves student deletion into **More actions**, and no longer repeats the current-step badge.
+- Active current- and previous-term violations include **Remove violation**. A reason is required; the entry remains auditable, stops counting toward the student's step, and related open follow-ups are reconciled to the recalculated step.
 - PDFs contain current and previous-term history, notes, canceled entries, step adjustments, follow-ups, and an uploaded-document index. Uploaded files themselves are not embedded.
 - Empty violation, adjustment, follow-up, and document sections are omitted from PDFs.
 - PDF downloads use the existing staff authentication. Exporting does not send email or change student records.
