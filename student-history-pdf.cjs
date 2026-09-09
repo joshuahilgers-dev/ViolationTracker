@@ -50,8 +50,8 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
       doc.moveDown(0.65);
     }
     function incidents(title, rows) {
+      if (!rows.length) return;
       section(title);
-      if (!rows.length) line("No violations recorded.");
       for (const incident of rows) record(
         `${incident.occurred_on} | ${incident.severity} | ${incident.infraction_label || "Uncategorized"}${incident.canceled_at ? " [CANCELED]" : ""}`,
         [incident.term_name && `Term: ${incident.term_name}`, `Reported by: ${incident.reported_by || "Not recorded"}`,
@@ -61,8 +61,8 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
         incident.notes && `Notes: ${incident.notes}`);
     }
     function adjustments(title, rows) {
+      if (!rows.length) return;
       section(title);
-      if (!rows.length) line("No administrative step adjustments recorded.");
       for (const item of rows) record(
         `${String(item.created_at || "").slice(0, 10)} | ${stepLabels[item.target_step] || item.target_step}`,
         [item.term_name && `Term: ${item.term_name}`, item.adjusted_by && `Adjusted by: ${item.adjusted_by}`],
@@ -87,17 +87,19 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
     incidents("Violation History: Previous Terms", student.previousIncidents);
     adjustments("Administrative Step Adjustments: Current Term", student.currentAdjustments);
     adjustments("Administrative Step Adjustments: Previous Terms", student.previousAdjustments);
-    section("Follow-Up History: All Terms");
-    if (!student.actions.length) line("No follow-ups recorded.");
-    for (const action of student.actions) record(`${action.title} | ${action.status}`, [
-      action.created_at && `Created: ${action.created_at}`, action.due_on && `Due: ${action.due_on}`,
-      action.completed_on && `Completed: ${action.completed_on}`, action.owner && `Owner: ${action.owner}`
-    ], action.notes && `Notes: ${action.notes}`);
-    section("Stored Document Index");
-    line("Uploaded files are listed below; their contents are not included in this PDF.");
-    if (!student.documents.length) line("No documents uploaded.");
-    for (const item of student.documents) record(item.original_name,
-      [item.title || item.action_title, item.term_name && `Term: ${item.term_name}`, item.uploaded_at && `Uploaded: ${item.uploaded_at}`]);
+    if (student.actions.length) {
+      section("Follow-Up History: All Terms");
+      for (const action of student.actions) record(`${action.title} | ${action.status}`, [
+        action.created_at && `Created: ${action.created_at}`, action.due_on && `Due: ${action.due_on}`,
+        action.completed_on && `Completed: ${action.completed_on}`, action.owner && `Owner: ${action.owner}`
+      ], action.notes && `Notes: ${action.notes}`);
+    }
+    if (student.documents.length) {
+      section("Stored Document Index");
+      line("Uploaded files are listed below; their contents are not included in this PDF.");
+      for (const item of student.documents) record(item.original_name,
+        [item.title || item.action_title, item.term_name && `Term: ${item.term_name}`, item.uploaded_at && `Uploaded: ${item.uploaded_at}`]);
+    }
     const range = doc.bufferedPageRange();
     for (let page = 0; page < range.count; page++) {
       doc.switchToPage(page);

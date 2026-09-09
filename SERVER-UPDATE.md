@@ -10,6 +10,7 @@ The school server's installation folder must be confirmed on the server; it may 
 - The student list starts collapsed and collapses on navigation and student review. It can still open for searching.
 - Student records include **Back to dashboard** and **Export PDF**.
 - PDFs contain current and previous-term history, notes, canceled entries, step adjustments, follow-ups, and an uploaded-document index. Uploaded files themselves are not embedded.
+- Empty violation, adjustment, follow-up, and document sections are omitted from PDFs.
 - PDF downloads use the existing staff authentication. Exporting does not send email or change student records.
 
 This update adds a PDF dependency. Run `npm ci` on the server after pulling. No database migration is required for these features.
