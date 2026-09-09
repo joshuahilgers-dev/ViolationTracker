@@ -76,6 +76,8 @@ const els = {
   templateMessage: document.querySelector("#template-message"),
   templateList: document.querySelector("#template-list"),
   infractionSettings: document.querySelector("#infraction-settings"),
+  infractionTypeForm: document.querySelector("#infraction-type-form"),
+  infractionMessage: document.querySelector("#infraction-message"),
   currentTermLabel: document.querySelector("#current-term-label"),
   termMessage: document.querySelector("#term-message"),
   startTermButton: document.querySelector("#start-term-button"),
@@ -528,24 +530,126 @@ function templateForAction(actionType) {
 }
 
 function renderInfractionSettings() {
-  const groups = state.infractionTypes.reduce((acc, type) => {
-    const key = `${type.severity}|${type.category}`;
-    acc[key] ||= [];
-    acc[key].push(type);
-    return acc;
-  }, {});
-
-  els.infractionSettings.innerHTML = Object.entries(groups).map(([key, items]) => {
-    const [severity, category] = key.split("|");
+  els.infractionSettings.innerHTML = ["minor", "major"].map(severity => {
+    const items = state.infractionTypes.filter(type => type.severity === severity);
     return `
       <div class="type-group">
-        <h4>${escapeHtml(category)} <span class="badge ${severity === "minor" ? "monitor" : "admin_review"}">${severity}</span></h4>
-        <ul>
-          ${items.map(item => `<li>${escapeHtml(item.label)}</li>`).join("")}
-        </ul>
+        <div class="type-group-heading">
+          <h4>${severity === "minor" ? "Minor violations" : "Major violations"}</h4>
+          <span class="badge ${severity === "minor" ? "monitor" : "admin_review"}">${items.length}</span>
+        </div>
+        <div class="infraction-type-list">
+          ${items.map(item => `
+            <article class="infraction-type-row">
+              <div class="infraction-type-summary">
+                <strong>${escapeHtml(item.label)}</strong>
+                <span>${escapeHtml(item.description || "No description")}</span>
+              </div>
+              <div class="row-actions">
+                <button class="quiet-button compact-button" type="button" data-edit-infraction="${item.id}">Edit</button>
+                <button class="danger-button compact-button" type="button" data-retire-infraction="${item.id}" data-infraction-label="${escapeHtml(item.label)}">Retire</button>
+              </div>
+              <form class="infraction-edit-form" data-infraction-edit-form="${item.id}" hidden>
+                <label>
+                  Type name
+                  <input name="label" maxlength="100" value="${escapeHtml(item.label)}" required>
+                </label>
+                <label>
+                  Severity
+                  <select name="severity" required>
+                    <option value="minor" ${item.severity === "minor" ? "selected" : ""}>Minor</option>
+                    <option value="major" ${item.severity === "major" ? "selected" : ""}>Major</option>
+                  </select>
+                </label>
+                <label class="full-width">
+                  Description <span class="optional-label">optional</span>
+                  <textarea name="description" maxlength="500" rows="2">${escapeHtml(item.description || "")}</textarea>
+                </label>
+                <div class="form-actions full-width">
+                  <button type="submit" class="primary-button">Save changes</button>
+                  <button type="button" class="quiet-button" data-cancel-infraction-edit="${item.id}">Cancel</button>
+                  <span role="status"></span>
+                </div>
+              </form>
+            </article>
+          `).join("")}
+        </div>
       </div>
     `;
   }).join("");
+}
+
+function toggleInfractionEdit(id, open) {
+  document.querySelectorAll("[data-infraction-edit-form]").forEach(form => {
+    form.hidden = Number(form.dataset.infractionEditForm) !== Number(id) || !open;
+  });
+}
+
+async function createInfractionType(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type='submit']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Adding...";
+  els.infractionMessage.textContent = "Adding...";
+  try {
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const result = await api("/api/infraction-types", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    form.reset();
+    await loadBootstrap();
+    els.infractionMessage.textContent = `${result.label} was ${result.action}.`;
+    setTimeout(() => { els.infractionMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.infractionMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
+async function updateInfractionType(form) {
+  const id = Number(form.dataset.infractionEditForm);
+  const status = form.querySelector("[role='status']");
+  const submitButton = form.querySelector("button[type='submit']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Saving...";
+  status.textContent = "Saving...";
+  try {
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const result = await api(`/api/infraction-types/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    els.infractionMessage.textContent = `${result.label} was updated.`;
+    setTimeout(() => { els.infractionMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
+async function retireInfractionType(id, label) {
+  const confirmed = window.confirm(`Retire ${label}? It will no longer appear when adding new violations. Existing student history will remain.`);
+  if (!confirmed) return;
+  try {
+    await api(`/api/infraction-types/${id}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    await loadBootstrap();
+    els.infractionMessage.textContent = `${label} was retired.`;
+    setTimeout(() => { els.infractionMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.infractionMessage.textContent = error.message;
+  }
 }
 
 function renderTemplates() {
@@ -1497,6 +1601,21 @@ document.addEventListener("click", event => {
   if (restoreStudentButton) {
     restoreStudent(Number(restoreStudentButton.dataset.restoreStudent), restoreStudentButton.dataset.studentName);
   }
+
+  const editInfractionButton = event.target.closest("[data-edit-infraction]");
+  if (editInfractionButton) {
+    toggleInfractionEdit(Number(editInfractionButton.dataset.editInfraction), true);
+  }
+
+  const cancelInfractionEditButton = event.target.closest("[data-cancel-infraction-edit]");
+  if (cancelInfractionEditButton) {
+    toggleInfractionEdit(Number(cancelInfractionEditButton.dataset.cancelInfractionEdit), false);
+  }
+
+  const retireInfractionButton = event.target.closest("[data-retire-infraction]");
+  if (retireInfractionButton) {
+    retireInfractionType(Number(retireInfractionButton.dataset.retireInfraction), retireInfractionButton.dataset.infractionLabel);
+  }
 });
 
 document.addEventListener("change", event => {
@@ -1508,6 +1627,12 @@ document.addEventListener("change", event => {
 });
 
 document.addEventListener("submit", event => {
+  const infractionEditForm = event.target.closest("[data-infraction-edit-form]");
+  if (infractionEditForm) {
+    event.preventDefault();
+    updateInfractionType(infractionEditForm);
+  }
+
   const form = event.target.closest("[data-step-adjust-form]");
   if (form) {
     event.preventDefault();
@@ -1525,6 +1650,7 @@ els.archivedStudentSearch.addEventListener("input", searchArchivedStudents);
 els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.startTermButton.addEventListener("click", startNewTerm);
 els.notificationForm.addEventListener("submit", saveNotificationSettings);
+els.infractionTypeForm.addEventListener("submit", createInfractionType);
 els.templateForm.addEventListener("submit", uploadTemplate);
 els.logoutButton.addEventListener("click", logout);
 els.incidentForm.addEventListener("change", event => {

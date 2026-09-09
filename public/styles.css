@@ -389,6 +389,78 @@ button {
   gap: 10px;
 }
 
+.infraction-add-form,
+.infraction-edit-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.55fr);
+  gap: 10px;
+}
+
+.infraction-add-form {
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.optional-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.type-group + .type-group {
+  margin-top: 12px;
+}
+
+.type-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.type-group-heading h4 {
+  margin: 0;
+}
+
+.infraction-type-list {
+  display: grid;
+  gap: 8px;
+}
+
+.infraction-type-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.infraction-type-summary {
+  min-width: 0;
+}
+
+.infraction-type-summary strong,
+.infraction-type-summary span {
+  display: block;
+}
+
+.infraction-type-summary span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.infraction-edit-form {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
 .empty {
   color: var(--muted);
   padding: 18px;
@@ -906,6 +978,11 @@ textarea {
   .detail-grid,
   .preview-summary,
   .preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .infraction-add-form,
+  .infraction-edit-form {
     grid-template-columns: 1fr;
   }
 }

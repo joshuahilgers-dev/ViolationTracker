@@ -190,34 +190,26 @@ function infractionKey(type) {
   return `${type.severity}|${type.label.toLowerCase()}`;
 }
 
+function infractionSeedKey(type) {
+  return `default:${infractionKey(type)}`;
+}
+
 function syncInfractionTypes() {
   const existing = prepare("SELECT * FROM infraction_types").all();
-  const desiredKeys = new Set(INFRACTION_TYPES.map(infractionKey));
-  const usedIds = new Set();
   const insert = prepare(`
-    INSERT INTO infraction_types (severity, category, label, description, active)
-    VALUES (?, ?, ?, ?, 1)
+    INSERT INTO infraction_types (severity, category, label, description, active, seed_key)
+    VALUES (?, ?, ?, ?, 1, ?)
   `);
-  const update = prepare(`
-    UPDATE infraction_types
-    SET category = ?, description = ?, active = 1
-    WHERE id = ?
-  `);
-  const deactivate = prepare("UPDATE infraction_types SET active = 0 WHERE id = ?");
+  const claimSeed = prepare("UPDATE infraction_types SET seed_key = ? WHERE id = ? AND seed_key IS NULL");
 
   for (const type of INFRACTION_TYPES) {
-    const match = existing.find(item => !usedIds.has(item.id) && infractionKey(item) === infractionKey(type));
+    const seedKey = infractionSeedKey(type);
+    const match = existing.find(item => item.seed_key === seedKey)
+      || existing.find(item => !item.seed_key && infractionKey(item) === infractionKey(type));
     if (match) {
-      update.run(type.category, type.description, match.id);
-      usedIds.add(match.id);
+      if (!match.seed_key) claimSeed.run(seedKey, match.id);
     } else {
-      insert.run(type.severity, type.category, type.label, type.description);
-    }
-  }
-
-  for (const item of existing) {
-    if (!desiredKeys.has(infractionKey(item)) || !usedIds.has(item.id)) {
-      deactivate.run(item.id);
+      insert.run(type.severity, type.category, type.label, type.description, seedKey);
     }
   }
 }
@@ -247,7 +239,8 @@ function migrate() {
       category TEXT NOT NULL,
       label TEXT NOT NULL,
       description TEXT,
-      active INTEGER NOT NULL DEFAULT 1
+      active INTEGER NOT NULL DEFAULT 1,
+      seed_key TEXT
     );
 
     CREATE TABLE IF NOT EXISTS incidents (
@@ -343,6 +336,7 @@ function migrate() {
   ensureColumn("incidents", "canceled_at", "TEXT");
   ensureColumn("incidents", "canceled_by", "TEXT");
   ensureColumn("incidents", "canceled_reason", "TEXT");
+  ensureColumn("infraction_types", "seed_key", "TEXT");
   ensureCurrentTerm();
   syncInfractionTypes();
 }
@@ -450,6 +444,29 @@ function prepareStatements() {
     FROM infraction_types
     WHERE active = 1
     ORDER BY severity, category, CASE WHEN label = 'Other' THEN 1 ELSE 0 END, label
+  `),
+  getInfraction: prepare("SELECT * FROM infraction_types WHERE id = ?"),
+  findInfractionByLabel: prepare(`
+    SELECT *
+    FROM infraction_types
+    WHERE severity = ? AND LOWER(TRIM(label)) = LOWER(TRIM(?)) AND id != ?
+    ORDER BY active DESC, id
+    LIMIT 1
+  `),
+  insertInfraction: prepare(`
+    INSERT INTO infraction_types (severity, category, label, description, active, seed_key)
+    VALUES (?, ?, ?, ?, 1, NULL)
+  `),
+  updateInfraction: prepare(`
+    UPDATE infraction_types
+    SET severity = ?, category = ?, label = ?, description = ?, active = 1
+    WHERE id = ?
+  `),
+  retireInfraction: prepare("UPDATE infraction_types SET active = 0 WHERE id = ?"),
+  countActiveInfractionsBySeverity: prepare(`
+    SELECT COUNT(*) AS count
+    FROM infraction_types
+    WHERE severity = ? AND active = 1
   `),
   createIncident: prepare(`
     INSERT INTO incidents (student_id, term_id, occurred_on, reported_by, class_period, severity, infraction_type_id, notes)
@@ -1116,6 +1133,27 @@ function nullable(value) {
   return String(value).trim();
 }
 
+function infractionPayload(body) {
+  const severity = required(body.severity, "Severity").toLowerCase();
+  if (!["minor", "major"].includes(severity)) {
+    throw Object.assign(new Error("Severity must be minor or major"), { status: 400 });
+  }
+  const label = required(body.label, "Violation type name");
+  if (label.length > 100) {
+    throw Object.assign(new Error("Violation type name must be 100 characters or fewer"), { status: 400 });
+  }
+  const description = nullable(body.description);
+  if (description && description.length > 500) {
+    throw Object.assign(new Error("Description must be 500 characters or fewer"), { status: 400 });
+  }
+  return {
+    severity,
+    category: severity === "minor" ? "Minor Violations" : "Major Violations",
+    label,
+    description
+  };
+}
+
 function optionalDate(value, label) {
   const date = nullable(value);
   if (!date) return null;
@@ -1441,6 +1479,58 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/infraction-types") {
+    const payload = infractionPayload(await readBody(req));
+    const duplicate = statements.findInfractionByLabel.get(payload.severity, payload.label, 0);
+    if (duplicate && Number(duplicate.active) === 1) {
+      return sendJson(res, 409, { error: "An active violation type with this name and severity already exists." });
+    }
+    let id;
+    let action;
+    if (duplicate) {
+      statements.updateInfraction.run(payload.severity, payload.category, payload.label, payload.description, duplicate.id);
+      id = Number(duplicate.id);
+      action = "restored";
+    } else {
+      id = Number(statements.insertInfraction.run(payload.severity, payload.category, payload.label, payload.description).lastInsertRowid);
+      action = "added";
+    }
+    statements.addAudit.run("infraction_type", id, `${payload.label} was ${action} as a ${payload.severity} violation type.`);
+    return sendJson(res, 201, { ...statements.getInfraction.get(id), action });
+  }
+
+  const infractionTypeMatch = url.pathname.match(/^\/api\/infraction-types\/(\d+)$/);
+  if (req.method === "PUT" && infractionTypeMatch) {
+    const id = Number(infractionTypeMatch[1]);
+    const existing = statements.getInfraction.get(id);
+    if (!existing || Number(existing.active) !== 1) {
+      return sendJson(res, 404, { error: "Active violation type not found" });
+    }
+    const payload = infractionPayload(await readBody(req));
+    const duplicate = statements.findInfractionByLabel.get(payload.severity, payload.label, id);
+    if (duplicate) {
+      return sendJson(res, 409, { error: "Another active or retired violation type already uses this name and severity." });
+    }
+    statements.updateInfraction.run(payload.severity, payload.category, payload.label, payload.description, id);
+    statements.addAudit.run("infraction_type", id, `${existing.label} was updated to ${payload.label} (${payload.severity}).`);
+    return sendJson(res, 200, statements.getInfraction.get(id));
+  }
+
+  if (req.method === "DELETE" && infractionTypeMatch) {
+    const id = Number(infractionTypeMatch[1]);
+    const existing = statements.getInfraction.get(id);
+    if (!existing || Number(existing.active) !== 1) {
+      return sendJson(res, 404, { error: "Active violation type not found" });
+    }
+    const activeCount = Number(statements.countActiveInfractionsBySeverity.get(existing.severity)?.count || 0);
+    if (activeCount <= 1) {
+      return sendJson(res, 400, { error: `Keep at least one active ${existing.severity} violation type.` });
+    }
+    statements.retireInfraction.run(id);
+    statements.addAudit.run("infraction_type", id, `${existing.label} was retired. Existing violation history was preserved.`);
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/students") {
     const body = await readBody(req);
     const mode = createOrUpdateStudent(body);
@@ -1618,6 +1708,14 @@ async function handleApi(req, res, url) {
     if (!["minor", "major"].includes(severity)) {
       throw Object.assign(new Error("Severity must be minor or major"), { status: 400 });
     }
+    const infractionTypeId = Number(required(body.infraction_type_id, "Violation type"));
+    const infractionType = statements.getInfraction.get(infractionTypeId);
+    if (!infractionType || Number(infractionType.active) !== 1) {
+      return sendJson(res, 400, { error: "Choose an active violation type." });
+    }
+    if (infractionType.severity !== severity) {
+      return sendJson(res, 400, { error: "The selected violation type does not match the chosen severity." });
+    }
     const term = currentTerm();
     const previousStatus = statusForStudent(studentId);
     const result = statements.createIncident.run(
@@ -1627,7 +1725,7 @@ async function handleApi(req, res, url) {
       reportedBy,
       nullable(body.class_period),
       severity,
-      body.infraction_type_id ? Number(body.infraction_type_id) : null,
+      infractionTypeId,
       nullable(body.notes)
     );
     const currentStatus = statusForStudent(studentId);
