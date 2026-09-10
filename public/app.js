@@ -288,7 +288,9 @@ function renderTeacherDashboard() {
       `${student.last_name}, ${student.first_name}`,
       student.grade
     ].join(" ").toLowerCase().includes(query);
-    return matchesSearch && selectedGrades.has(String(student.grade || "").trim());
+    const gradeMatch = String(student.grade || "").match(/\d+/);
+    const normalizedGrade = gradeMatch ? String(Number(gradeMatch[0])) : "";
+    return matchesSearch && selectedGrades.has(normalizedGrade);
   });
   els.teacherTermLabel.textContent = state.currentTerm
     ? `Current term: ${state.currentTerm.name}`
@@ -299,9 +301,14 @@ function renderTeacherDashboard() {
   }
   const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
   els.teacherStatusGroups.innerHTML = order.map(key => {
-    const students = visible.filter(student => student.status.key === key);
+    const students = key === "warnings"
+      ? visible.filter(student => student.warning_count > 0)
+      : visible.filter(student => student.status.key === key);
     if (!students.length) return "";
-    const status = students[0].status;
+    const status = key === "warnings" ? {
+      label: "Warnings documented",
+      description: "These students have a current-term warning. Warnings do not count toward intervention steps."
+    } : students[0].status;
     return `
       <section class="panel teacher-status-section ${escapeHtml(key)}">
         <div class="panel-heading">
