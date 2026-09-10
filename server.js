@@ -1611,6 +1611,39 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { currentTerm: term, students });
   }
 
+  const teacherStudentMatch = url.pathname.match(/^\/api\/teacher-dashboard\/students\/(\d+)$/);
+  if (req.method === "GET" && teacherStudentMatch) {
+    const student = statements.getStudent.get(Number(teacherStudentMatch[1]));
+    if (!student || Number(student.active) !== 1) {
+      return sendJson(res, 404, { error: "Student not found." });
+    }
+    const term = currentTerm();
+    const incidents = statements.incidentsForStudent
+      .all(student.id)
+      .filter(incident => Number(incident.term_id) === Number(term.id) && !incident.canceled_at)
+      .map(incident => ({
+        id: incident.id,
+        occurred_on: incident.occurred_on,
+        entry_type: incident.entry_type === "warning" ? "warning" : "violation",
+        severity: incident.severity,
+        infraction_label: incident.infraction_label || "Uncategorized",
+        class_period: incident.class_period || null,
+        reported_by: incident.reported_by,
+        notes: incident.notes || null
+      }));
+    return sendJson(res, 200, {
+      student: {
+        id: student.id,
+        first_name: student.first_name,
+        last_name: student.last_name,
+        grade: student.grade,
+        status: statusForStudent(student.id)
+      },
+      currentTerm: term,
+      incidents
+    });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/staff-access") {
     requireTechAdmin(currentUser);
     return sendJson(res, 200, {

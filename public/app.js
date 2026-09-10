@@ -54,6 +54,11 @@ const els = {
   teacherStudentSearch: document.querySelector("#teacher-student-search"),
   teacherTermLabel: document.querySelector("#teacher-term-label"),
   teacherStatusGroups: document.querySelector("#teacher-status-groups"),
+  teacherGradeFilters: document.querySelectorAll("[data-teacher-grade]"),
+  teacherStudentDialog: document.querySelector("#teacher-student-dialog"),
+  teacherDialogTitle: document.querySelector("#teacher-dialog-title"),
+  teacherDialogSubtitle: document.querySelector("#teacher-dialog-subtitle"),
+  teacherDialogContent: document.querySelector("#teacher-dialog-content"),
   metricStudents: document.querySelector("#metric-students"),
   metricActions: document.querySelector("#metric-actions"),
   metricContracts: document.querySelector("#metric-contracts"),
@@ -272,18 +277,24 @@ function renderAll() {
 
 function renderTeacherDashboard() {
   const query = (els.teacherStudentSearch.value || "").trim().toLowerCase();
-  const visible = state.teacherStudents.filter(student => [
-    student.first_name,
-    student.last_name,
-    `${student.first_name} ${student.last_name}`,
-    `${student.last_name}, ${student.first_name}`,
-    student.grade
-  ].join(" ").toLowerCase().includes(query));
+  const selectedGrades = new Set([...els.teacherGradeFilters]
+    .filter(input => input.checked)
+    .map(input => input.value));
+  const visible = state.teacherStudents.filter(student => {
+    const matchesSearch = [
+      student.first_name,
+      student.last_name,
+      `${student.first_name} ${student.last_name}`,
+      `${student.last_name}, ${student.first_name}`,
+      student.grade
+    ].join(" ").toLowerCase().includes(query);
+    return matchesSearch && selectedGrades.has(String(student.grade || "").trim());
+  });
   els.teacherTermLabel.textContent = state.currentTerm
     ? `Current term: ${state.currentTerm.name}`
     : "";
   if (!visible.length) {
-    els.teacherStatusGroups.innerHTML = `<div class="empty">${query ? "No students match that search." : "No students currently have warnings or active technology intervention steps."}</div>`;
+    els.teacherStatusGroups.innerHTML = `<div class="empty">${query || selectedGrades.size < 3 ? "No students match the selected search and grade filters." : "No students currently have warnings or active technology intervention steps."}</div>`;
     return;
   }
   const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
@@ -302,7 +313,7 @@ function renderTeacherDashboard() {
         </div>
         <div class="teacher-student-grid">
           ${students.map(student => `
-            <article class="teacher-student-card">
+            <button type="button" class="teacher-student-card" data-teacher-student-id="${student.id}" aria-label="View details for ${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}">
               <h4>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</h4>
               <div class="meta">
                 ${student.grade ? `<span>Grade ${escapeHtml(student.grade)}</span>` : ""}
@@ -310,11 +321,51 @@ function renderTeacherDashboard() {
                 ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
                 ${student.chromebook_return_on ? `<span>Return date ${escapeHtml(student.chromebook_return_on)}</span>` : ""}
               </div>
-            </article>
+              <span class="panel-note">Select for details</span>
+            </button>
           `).join("")}
         </div>
       </section>`;
   }).join("");
+}
+
+async function showTeacherStudentDetail(studentId) {
+  els.teacherDialogTitle.textContent = "Student details";
+  els.teacherDialogSubtitle.textContent = "Loading current-term history...";
+  els.teacherDialogContent.innerHTML = `<div class="empty">Loading...</div>`;
+  if (!els.teacherStudentDialog.open) els.teacherStudentDialog.showModal();
+  try {
+    const data = await api(`/api/teacher-dashboard/students/${studentId}`);
+    const student = data.student;
+    els.teacherDialogTitle.textContent = `${student.first_name} ${student.last_name}`;
+    els.teacherDialogSubtitle.textContent = [
+      student.grade ? `Grade ${student.grade}` : "",
+      data.currentTerm?.name || "Current term",
+      student.status?.label || ""
+    ].filter(Boolean).join(" · ");
+    els.teacherDialogContent.innerHTML = data.incidents.length
+      ? data.incidents.map(incident => {
+          const isWarning = incident.entry_type === "warning";
+          const entryLabel = isWarning ? "Warning" : `${incident.severity === "major" ? "Major" : "Minor"} violation`;
+          return `
+            <article class="teacher-history-entry">
+              <div class="panel-heading">
+                <h3>${escapeHtml(incident.infraction_label)}</h3>
+                <span class="badge ${isWarning ? "warnings" : escapeHtml(incident.severity)}">${escapeHtml(entryLabel)}</span>
+              </div>
+              <div class="meta">
+                <span>${escapeHtml(formatDate(incident.occurred_on))}</span>
+                ${incident.class_period ? `<span>${escapeHtml(incident.class_period)}</span>` : ""}
+                <span>Reported by ${escapeHtml(incident.reported_by)}</span>
+              </div>
+              ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
+            </article>`;
+        }).join("")
+      : `<div class="empty">No active warnings or violations are recorded for this term.</div>`;
+  } catch (error) {
+    els.teacherDialogSubtitle.textContent = "Unable to load details";
+    els.teacherDialogContent.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 async function loadStaffAccess() {
@@ -2008,6 +2059,11 @@ document.addEventListener("click", event => {
 
   const saveStaffButton = event.target.closest("[data-save-staff]");
   if (saveStaffButton) saveStaffAccess(saveStaffButton.dataset.saveStaff, saveStaffButton);
+
+  const teacherStudentButton = event.target.closest("[data-teacher-student-id]");
+  if (teacherStudentButton) showTeacherStudentDetail(Number(teacherStudentButton.dataset.teacherStudentId));
+
+  if (event.target.closest("[data-close-teacher-dialog]")) els.teacherStudentDialog.close();
 });
 
 document.addEventListener("change", event => {
@@ -2047,6 +2103,10 @@ els.templateForm.addEventListener("submit", uploadTemplate);
 els.staffAccessForm.addEventListener("submit", addStaffAccess);
 els.logoutButton.addEventListener("click", logout);
 els.teacherStudentSearch.addEventListener("input", renderTeacherDashboard);
+els.teacherGradeFilters.forEach(input => input.addEventListener("change", renderTeacherDashboard));
+els.teacherStudentDialog.addEventListener("click", event => {
+  if (event.target === els.teacherStudentDialog) els.teacherStudentDialog.close();
+});
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();
   if (event.target.name === "entry_type") updateIncidentEntryTypeUi();

@@ -399,7 +399,7 @@ button {
 
 .teacher-search-panel {
   display: grid;
-  grid-template-columns: auto minmax(220px, 420px) 1fr;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
   align-items: center;
   gap: 12px;
   margin-bottom: 18px;
@@ -407,6 +407,45 @@ button {
 
 .teacher-search-panel label {
   font-weight: 750;
+}
+
+.teacher-search-panel > .panel-note {
+  grid-column: 2 / -1;
+}
+
+.teacher-grade-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.teacher-grade-filters legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.teacher-grade-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.teacher-grade-filters label:has(input:checked) {
+  border-color: var(--accent);
+  background: #e6fffb;
+  color: var(--accent-dark);
 }
 
 .teacher-status-groups,
@@ -433,14 +472,80 @@ button {
 }
 
 .teacher-student-card {
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px;
   background: #f8fafc;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.teacher-student-card:hover,
+.teacher-student-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
 }
 
 .teacher-student-card h4 {
   margin: 0 0 5px;
+}
+
+.teacher-student-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
+}
+
+.teacher-student-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.teacher-dialog-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.teacher-dialog-header h2,
+.teacher-dialog-header p {
+  margin: 0;
+}
+
+.teacher-dialog-header p {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+.teacher-dialog-content {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.teacher-history-entry {
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.teacher-history-entry h3,
+.teacher-history-entry p {
+  margin: 0;
+}
+
+.teacher-history-entry p {
+  margin-top: 8px;
+  line-height: 1.45;
 }
 
 .staff-access-panel {
@@ -1315,6 +1420,10 @@ textarea {
   .staff-access-row,
   .teacher-search-panel {
     grid-template-columns: 1fr;
+  }
+
+  .teacher-search-panel > .panel-note {
+    grid-column: auto;
   }
 }
 

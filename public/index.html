@@ -64,9 +64,25 @@
           <section class="panel teacher-search-panel">
             <label for="teacher-student-search">Find a student</label>
             <input id="teacher-student-search" type="search" placeholder="Search by student name or grade">
+            <fieldset class="teacher-grade-filters">
+              <legend>Grades</legend>
+              <label><input type="checkbox" value="6" data-teacher-grade checked> 6th</label>
+              <label><input type="checkbox" value="7" data-teacher-grade checked> 7th</label>
+              <label><input type="checkbox" value="8" data-teacher-grade checked> 8th</label>
+            </fieldset>
             <span id="teacher-term-label" class="panel-note"></span>
           </section>
           <div id="teacher-status-groups" class="teacher-status-groups" aria-live="polite"></div>
+          <dialog id="teacher-student-dialog" class="teacher-student-dialog" aria-labelledby="teacher-dialog-title">
+            <div class="teacher-dialog-header">
+              <div>
+                <h2 id="teacher-dialog-title">Student details</h2>
+                <p id="teacher-dialog-subtitle"></p>
+              </div>
+              <button type="button" class="quiet-button" data-close-teacher-dialog aria-label="Close student details">Close</button>
+            </div>
+            <div id="teacher-dialog-content" class="teacher-dialog-content"></div>
+          </dialog>
         </section>
 
         <section class="view active" id="dashboard-view">
