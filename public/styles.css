@@ -552,6 +552,10 @@ button {
   margin-bottom: 18px;
 }
 
+.staff-access-intro {
+  margin: 14px 0;
+}
+
 .staff-access-form {
   display: grid;
   grid-template-columns: 1fr 1.2fr minmax(180px, 0.8fr);
