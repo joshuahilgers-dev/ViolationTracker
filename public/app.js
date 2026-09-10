@@ -301,9 +301,7 @@ function renderTeacherDashboard() {
   }
   const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
   els.teacherStatusGroups.innerHTML = order.map(key => {
-    const students = key === "warnings"
-      ? visible.filter(student => student.warning_count > 0)
-      : visible.filter(student => student.status.key === key);
+    const students = visible.filter(student => student.status.key === key);
     if (!students.length) return "";
     const status = key === "warnings" ? {
       label: "Warnings documented",
