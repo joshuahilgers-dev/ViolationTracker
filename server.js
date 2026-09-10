@@ -19,6 +19,9 @@ const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.s
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 const AUTH_DISABLED = process.env.AUTH_DISABLED === "1";
+const DEV_USER_EMAIL = (process.env.DEV_USER_EMAIL || "dev@wrps.net").toLowerCase();
+const DEV_USER_NAME = process.env.DEV_USER_NAME || "Development User";
+const DEV_USER_ROLE = process.env.DEV_USER_ROLE || "tech_admin";
 const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "wrps.net").toLowerCase();
 const BLOCKED_EMAIL_DOMAINS = (process.env.BLOCKED_EMAIL_DOMAINS || "stu.wrps.net")
   .split(",")
@@ -39,6 +42,20 @@ const SMTP_HELLO = process.env.SMTP_HELLO || "";
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || SMTP_USER || `Technology Violation Tracker <no-reply@${ALLOWED_EMAIL_DOMAIN}>`;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 let mailTransporter;
+
+const STAFF_ROLES = new Set(["teacher", "tech_staff", "tech_admin"]);
+const STAFF_ROLE_LABELS = {
+  teacher: "Teacher",
+  tech_staff: "Tech Staff",
+  tech_admin: "Tech Admin"
+};
+const SEED_TECH_ADMINS = [
+  { email: "joshua.hilgers@wrps.net", displayName: "Joshua Hilgers" },
+  { email: "kirsten.johnson@wrps.net", displayName: "Kirsten Johnson" }
+];
+const SEED_TECH_STAFF = [
+  { email: "tonya.hawke@wrps.net", displayName: "Tonya Hawke" }
+];
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
@@ -214,6 +231,19 @@ function syncInfractionTypes() {
   }
 }
 
+function syncSeedStaffUsers() {
+  const insertAdmin = prepare(`
+    INSERT OR IGNORE INTO staff_users (email, display_name, role, active, updated_by)
+    VALUES (?, ?, 'tech_admin', 1, 'system seed')
+  `);
+  const insertTechStaff = prepare(`
+    INSERT OR IGNORE INTO staff_users (email, display_name, role, active, updated_by)
+    VALUES (?, ?, 'tech_staff', 1, 'system seed')
+  `);
+  for (const user of SEED_TECH_ADMINS) insertAdmin.run(user.email, user.displayName);
+  for (const user of SEED_TECH_STAFF) insertTechStaff.run(user.email, user.displayName);
+}
+
 function migrate() {
   execSql(`
     CREATE TABLE IF NOT EXISTS students (
@@ -331,6 +361,17 @@ function migrate() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS staff_users (
+      email TEXT PRIMARY KEY COLLATE NOCASE,
+      display_name TEXT,
+      role TEXT NOT NULL CHECK (role IN ('teacher', 'tech_staff', 'tech_admin')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by TEXT,
+      last_login_at TEXT
+    );
   `, true);
 
   ensureColumn("students", "archived_at", "TEXT");
@@ -347,6 +388,7 @@ function migrate() {
   ensureColumn("infraction_types", "seed_key", "TEXT");
   ensureCurrentTerm();
   syncInfractionTypes();
+  syncSeedStaffUsers();
 }
 
 function ensureCurrentTerm() {
@@ -716,6 +758,34 @@ function prepareStatements() {
   insertStepAdjustment: prepare(`
     INSERT INTO step_adjustments (student_id, term_id, target_step, reason, adjusted_by)
     VALUES (?, ?, ?, ?, ?)
+  `),
+  listStaffUsers: prepare(`
+    SELECT email, display_name, role, active, created_at, updated_at, updated_by, last_login_at
+    FROM staff_users
+    ORDER BY active DESC,
+      CASE role WHEN 'tech_admin' THEN 1 WHEN 'tech_staff' THEN 2 ELSE 3 END,
+      COALESCE(display_name, email)
+  `),
+  getStaffUser: prepare(`
+    SELECT email, display_name, role, active, created_at, updated_at, updated_by, last_login_at
+    FROM staff_users WHERE email = ? COLLATE NOCASE
+  `),
+  insertStaffUser: prepare(`
+    INSERT INTO staff_users (email, display_name, role, active, updated_by)
+    VALUES (?, ?, ?, 1, ?)
+  `),
+  updateStaffUser: prepare(`
+    UPDATE staff_users
+    SET display_name = ?, role = ?, active = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+    WHERE email = ? COLLATE NOCASE
+  `),
+  recordStaffLogin: prepare(`
+    UPDATE staff_users
+    SET display_name = COALESCE(NULLIF(?, ''), display_name), last_login_at = CURRENT_TIMESTAMP
+    WHERE email = ? COLLATE NOCASE
+  `),
+  countActiveTechAdmins: prepare(`
+    SELECT COUNT(*) AS count FROM staff_users WHERE role = 'tech_admin' AND active = 1
   `)
 };
 }
@@ -831,6 +901,28 @@ function toStudentView(row) {
     student.chromebook_return_on = returnAction?.due_on || null;
   }
   return student;
+}
+
+function toTeacherStudentView(row) {
+  const student = toStudentView(row);
+  const warningOnly = student.status.key === "no_violations" && student.warning_count > 0;
+  return {
+    id: student.id,
+    first_name: student.first_name,
+    last_name: student.last_name,
+    grade: student.grade,
+    violation_count: student.violation_count,
+    minor_count: student.minor_count,
+    major_count: student.major_count,
+    warning_count: student.warning_count,
+    chromebook_return_on: student.chromebook_return_on || null,
+    status: warningOnly ? {
+      key: "warnings",
+      label: "Warnings documented",
+      level: 0,
+      description: "A warning is documented. No violation currently counts toward an intervention step."
+    } : student.status
+  };
 }
 
 function currentTerm() {
@@ -1098,9 +1190,10 @@ function clearSessionCookie() {
 function getSession(req) {
   if (AUTH_DISABLED) {
     return {
-      name: "Development User",
-      email: `dev@${ALLOWED_EMAIL_DOMAIN}`,
+      name: DEV_USER_NAME,
+      email: DEV_USER_EMAIL,
       picture: null,
+      developmentRole: STAFF_ROLES.has(DEV_USER_ROLE) ? DEV_USER_ROLE : "tech_admin",
       expiresAt: Date.now() + SESSION_HOURS * 60 * 60 * 1000
     };
   }
@@ -1125,6 +1218,80 @@ function requireAuth(req) {
     throw Object.assign(new Error("Sign in required"), { status: 401 });
   }
   return session;
+}
+
+function normalizeStaffEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function staffUserView(record, session = {}) {
+  return {
+    name: record.display_name || session.name || record.email,
+    email: record.email,
+    picture: session.picture || null,
+    role: record.role,
+    roleLabel: STAFF_ROLE_LABELS[record.role],
+    active: Boolean(Number(record.active)),
+    permissions: {
+      teacherDashboard: true,
+      techWorkspace: record.role === "tech_staff" || record.role === "tech_admin",
+      settings: record.role === "tech_admin",
+      manageStaff: record.role === "tech_admin"
+    }
+  };
+}
+
+function ensureStaffUser(session, { recordLogin = false } = {}) {
+  const email = normalizeStaffEmail(session.email);
+  if (!isAllowedStaffEmail(email)) {
+    throw Object.assign(new Error(`Use a staff ${ALLOWED_EMAIL_DOMAIN} account to access this tracker.`), { status: 403 });
+  }
+  let record = statements.getStaffUser.get(email);
+  if (!record) {
+    const initialRole = AUTH_DISABLED && session.developmentRole ? session.developmentRole : "teacher";
+    statements.insertStaffUser.run(email, nullable(session.name), initialRole, AUTH_DISABLED ? "development sign-in" : "automatic staff sign-in");
+    record = statements.getStaffUser.get(email);
+  }
+  if (!Number(record.active)) {
+    throw Object.assign(new Error("Your tracker access is inactive. Contact a Tech Admin."), { status: 403 });
+  }
+  if (recordLogin) {
+    statements.recordStaffLogin.run(nullable(session.name) || "", email);
+    record = statements.getStaffUser.get(email);
+  }
+  return staffUserView(record, session);
+}
+
+function requireStaffAccess(req) {
+  return ensureStaffUser(requireAuth(req));
+}
+
+function requireTechAccess(user) {
+  if (!user.permissions.techWorkspace) {
+    throw Object.assign(new Error("Tech Staff access is required."), { status: 403 });
+  }
+}
+
+function requireTechAdmin(user) {
+  if (user.role !== "tech_admin") {
+    throw Object.assign(new Error("Tech Admin access is required."), { status: 403 });
+  }
+}
+
+function staffAccessPayload(body) {
+  const email = normalizeStaffEmail(required(body.email, "Staff email"));
+  if (!isAllowedStaffEmail(email)) {
+    throw Object.assign(new Error(`Enter a staff ${ALLOWED_EMAIL_DOMAIN} email address.`), { status: 400 });
+  }
+  const role = required(body.role, "Role");
+  if (!STAFF_ROLES.has(role)) {
+    throw Object.assign(new Error("Choose Teacher, Tech Staff, or Tech Admin."), { status: 400 });
+  }
+  const displayName = nullable(body.display_name);
+  if (displayName && displayName.length > 120) {
+    throw Object.assign(new Error("Staff name must be 120 characters or fewer."), { status: 400 });
+  }
+  return { email, role, displayName };
 }
 
 function readBody(req) {
@@ -1395,12 +1562,12 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/auth/me") {
     const session = getSession(req);
     if (!session) return sendJson(res, 401, { error: "Sign in required" });
-    return sendJson(res, 200, { user: session });
+    return sendJson(res, 200, { user: ensureStaffUser(session) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/auth/google") {
     if (AUTH_DISABLED) {
-      return sendJson(res, 200, { user: getSession(req) });
+      return sendJson(res, 200, { user: ensureStaffUser(getSession(req), { recordLogin: true }) });
     }
     if (!GOOGLE_CLIENT_ID) {
       return sendJson(res, 503, { error: "Google sign-in is not configured." });
@@ -1420,11 +1587,12 @@ async function handleApi(req, res, url) {
     }
     const user = {
       name: payload.name || payload.email,
-      email: payload.email,
+      email: normalizeStaffEmail(payload.email),
       picture: payload.picture || null
     };
+    const accessUser = ensureStaffUser(user, { recordLogin: true });
     res.setHeader("Set-Cookie", sessionCookie(encodeSession(user)));
-    return sendJson(res, 200, { user });
+    return sendJson(res, 200, { user: accessUser });
   }
 
   if (req.method === "POST" && url.pathname === "/api/auth/logout") {
@@ -1432,7 +1600,77 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
-  requireAuth(req);
+  const currentUser = requireStaffAccess(req);
+
+  if (req.method === "GET" && url.pathname === "/api/teacher-dashboard") {
+    const term = currentTerm();
+    const students = statements.listStudents
+      .all(term.id, "", "%%")
+      .map(toTeacherStudentView)
+      .filter(student => student.violation_count > 0 || student.warning_count > 0);
+    return sendJson(res, 200, { currentTerm: term, students });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/staff-access") {
+    requireTechAdmin(currentUser);
+    return sendJson(res, 200, {
+      roles: STAFF_ROLE_LABELS,
+      users: statements.listStaffUsers.all().map(record => ({
+        ...record,
+        active: Boolean(Number(record.active)),
+        roleLabel: STAFF_ROLE_LABELS[record.role]
+      }))
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/staff-access") {
+    requireTechAdmin(currentUser);
+    const payload = staffAccessPayload(await readBody(req));
+    if (statements.getStaffUser.get(payload.email)) {
+      return sendJson(res, 409, { error: "That staff account already exists. Edit its role in the list below." });
+    }
+    statements.insertStaffUser.run(payload.email, payload.displayName, payload.role, currentUser.email);
+    statements.addAudit.run("staff_access", 0, `${currentUser.email} added ${payload.email} as ${STAFF_ROLE_LABELS[payload.role]}.`);
+    return sendJson(res, 201, {
+      ...statements.getStaffUser.get(payload.email),
+      active: true,
+      roleLabel: STAFF_ROLE_LABELS[payload.role]
+    });
+  }
+
+  const staffAccessMatch = url.pathname.match(/^\/api\/staff-access\/(.+)$/);
+  if (req.method === "PUT" && staffAccessMatch) {
+    requireTechAdmin(currentUser);
+    const email = normalizeStaffEmail(decodeURIComponent(staffAccessMatch[1]));
+    const existing = statements.getStaffUser.get(email);
+    if (!existing) return sendJson(res, 404, { error: "Staff account not found." });
+    const body = await readBody(req);
+    const payload = staffAccessPayload({ ...body, email });
+    const active = body.active === true || body.active === 1 || body.active === "1";
+    const removesActiveAdmin = existing.role === "tech_admin" && Number(existing.active) === 1
+      && (payload.role !== "tech_admin" || !active);
+    if (removesActiveAdmin && Number(statements.countActiveTechAdmins.get().count) <= 1) {
+      return sendJson(res, 409, { error: "At least one active Tech Admin must remain." });
+    }
+    statements.updateStaffUser.run(payload.displayName, payload.role, active ? 1 : 0, currentUser.email, email);
+    statements.addAudit.run("staff_access", 0, `${currentUser.email} updated ${email} to ${STAFF_ROLE_LABELS[payload.role]} (${active ? "active" : "inactive"}).`);
+    const updated = statements.getStaffUser.get(email);
+    return sendJson(res, 200, {
+      ...updated,
+      active: Boolean(Number(updated.active)),
+      roleLabel: STAFF_ROLE_LABELS[updated.role]
+    });
+  }
+
+  requireTechAccess(currentUser);
+
+  const adminMutation =
+    (url.pathname === "/api/settings/notifications" && req.method !== "GET")
+    || (url.pathname.startsWith("/api/infraction-types") && req.method !== "GET")
+    || url.pathname.startsWith("/api/roster-rollover/")
+    || url.pathname === "/api/terms/start"
+    || (url.pathname.startsWith("/api/templates") && req.method !== "GET");
+  if (adminMutation) requireTechAdmin(currentUser);
 
   const templateFileMatch = url.pathname.match(/^\/templates\/([^/]+)\/file$/);
   if (req.method === "GET" && templateFileMatch) {

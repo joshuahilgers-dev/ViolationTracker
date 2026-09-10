@@ -3,6 +3,8 @@ const state = {
   currentUser: null,
   currentTerm: null,
   notificationSettings: null,
+  teacherStudents: [],
+  staffUsers: [],
   students: [],
   infractionTypes: [],
   templates: [],
@@ -42,9 +44,16 @@ const els = {
   loginMessage: document.querySelector("#login-message"),
   signedInName: document.querySelector("#signed-in-name"),
   signedInEmail: document.querySelector("#signed-in-email"),
+  signedInRole: document.querySelector("#signed-in-role"),
   logoutButton: document.querySelector("#logout-button"),
   navButtons: document.querySelectorAll(".nav-button"),
+  teacherNav: document.querySelector("[data-teacher-nav]"),
+  techNavButtons: document.querySelectorAll("[data-tech-nav]"),
+  adminNavButtons: document.querySelectorAll("[data-admin-nav]"),
   views: document.querySelectorAll(".view"),
+  teacherStudentSearch: document.querySelector("#teacher-student-search"),
+  teacherTermLabel: document.querySelector("#teacher-term-label"),
+  teacherStatusGroups: document.querySelector("#teacher-status-groups"),
   metricStudents: document.querySelector("#metric-students"),
   metricActions: document.querySelector("#metric-actions"),
   metricContracts: document.querySelector("#metric-contracts"),
@@ -90,7 +99,10 @@ const els = {
   rolloverApplyButton: document.querySelector("#rollover-apply-button"),
   notificationForm: document.querySelector("#notification-form"),
   notificationMessage: document.querySelector("#notification-message"),
-  notificationStatus: document.querySelector("#notification-status")
+  notificationStatus: document.querySelector("#notification-status"),
+  staffAccessForm: document.querySelector("#staff-access-form"),
+  staffAccessMessage: document.querySelector("#staff-access-message"),
+  staffAccessList: document.querySelector("#staff-access-list")
 };
 
 function today() {
@@ -137,7 +149,19 @@ function showApp(user) {
   els.appShell.hidden = false;
   els.signedInName.textContent = user.name || "Signed in";
   els.signedInEmail.textContent = user.email || "";
+  els.signedInRole.textContent = user.roleLabel || "";
+  const isTeacher = user.role === "teacher";
+  const isAdmin = user.role === "tech_admin";
+  els.teacherNav.hidden = !isTeacher;
+  els.techNavButtons.forEach(button => { button.hidden = isTeacher; });
+  els.adminNavButtons.forEach(button => { button.hidden = !isAdmin; });
+  switchView(isTeacher ? "teacher-dashboard" : "dashboard");
   populateReporterEmail();
+}
+
+async function loadWorkspace() {
+  if (state.currentUser?.role === "teacher") return loadTeacherDashboard();
+  return loadBootstrap();
 }
 
 async function loadAuth() {
@@ -145,16 +169,17 @@ async function loadAuth() {
   try {
     const { user } = await api("/api/auth/me");
     showApp(user);
-    await loadBootstrap();
+    await loadWorkspace();
     return;
-  } catch {
-    showLogin();
+  } catch (error) {
+    showLogin(error.status === 403 ? error.message : "");
+    if (error.status === 403) return;
   }
 
   if (state.authConfig.authDisabled) {
     const { user } = await api("/api/auth/me");
     showApp(user);
-    await loadBootstrap();
+    await loadWorkspace();
     return;
   }
 
@@ -196,7 +221,7 @@ async function handleGoogleCredential(response) {
       body: JSON.stringify({ credential: response.credential })
     });
     showApp(user);
-    await loadBootstrap();
+    await loadWorkspace();
   } catch (error) {
     showLogin(error.message);
   }
@@ -212,7 +237,15 @@ async function loadBootstrap() {
   state.openActions = data.openActions;
   state.incidentStudentHistory = null;
   renderAll();
+  if (state.currentUser?.role === "tech_admin") await loadStaffAccess();
   populateReporterEmail();
+}
+
+async function loadTeacherDashboard() {
+  const data = await api("/api/teacher-dashboard");
+  state.currentTerm = data.currentTerm;
+  state.teacherStudents = data.students || [];
+  renderTeacherDashboard();
 }
 
 function populateReporterEmail() {
@@ -237,6 +270,140 @@ function renderAll() {
   renderNotificationSettings();
 }
 
+function renderTeacherDashboard() {
+  const query = (els.teacherStudentSearch.value || "").trim().toLowerCase();
+  const visible = state.teacherStudents.filter(student => [
+    student.first_name,
+    student.last_name,
+    `${student.first_name} ${student.last_name}`,
+    `${student.last_name}, ${student.first_name}`,
+    student.grade
+  ].join(" ").toLowerCase().includes(query));
+  els.teacherTermLabel.textContent = state.currentTerm
+    ? `Current term: ${state.currentTerm.name}`
+    : "";
+  if (!visible.length) {
+    els.teacherStatusGroups.innerHTML = `<div class="empty">${query ? "No students match that search." : "No students currently have warnings or active technology intervention steps."}</div>`;
+    return;
+  }
+  const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
+  els.teacherStatusGroups.innerHTML = order.map(key => {
+    const students = visible.filter(student => student.status.key === key);
+    if (!students.length) return "";
+    const status = students[0].status;
+    return `
+      <section class="panel teacher-status-section ${escapeHtml(key)}">
+        <div class="panel-heading">
+          <div>
+            <h3>${escapeHtml(status.label)}</h3>
+            <p class="panel-note">${escapeHtml(status.description)}</p>
+          </div>
+          <span class="badge ${escapeHtml(key)}">${students.length} student${students.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="teacher-student-grid">
+          ${students.map(student => `
+            <article class="teacher-student-card">
+              <h4>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</h4>
+              <div class="meta">
+                ${student.grade ? `<span>Grade ${escapeHtml(student.grade)}</span>` : ""}
+                <span>${student.violation_count} violation${student.violation_count === 1 ? "" : "s"}</span>
+                ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
+                ${student.chromebook_return_on ? `<span>Return date ${escapeHtml(student.chromebook_return_on)}</span>` : ""}
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>`;
+  }).join("");
+}
+
+async function loadStaffAccess() {
+  const data = await api("/api/staff-access");
+  state.staffUsers = data.users || [];
+  renderStaffAccess();
+}
+
+function renderStaffAccess() {
+  if (!els.staffAccessList) return;
+  if (!state.staffUsers.length) {
+    els.staffAccessList.innerHTML = `<div class="empty">No staff accounts are listed yet.</div>`;
+    return;
+  }
+  els.staffAccessList.innerHTML = state.staffUsers.map(user => `
+    <div class="staff-access-row ${user.active ? "" : "inactive"}" data-staff-row="${escapeHtml(user.email)}">
+      <div class="staff-identity">
+        <strong>${escapeHtml(user.display_name || user.email)}</strong>
+        <span>${escapeHtml(user.email)}${user.email === state.currentUser?.email ? " · You" : ""}</span>
+      </div>
+      <label>
+        Access level
+        <select data-staff-role>
+          <option value="teacher" ${user.role === "teacher" ? "selected" : ""}>Teacher - read only</option>
+          <option value="tech_staff" ${user.role === "tech_staff" ? "selected" : ""}>Tech Staff</option>
+          <option value="tech_admin" ${user.role === "tech_admin" ? "selected" : ""}>Tech Admin</option>
+        </select>
+      </label>
+      <label class="active-toggle">
+        <input type="checkbox" data-staff-active ${user.active ? "checked" : ""}>
+        Active
+      </label>
+      <button class="quiet-button" type="button" data-save-staff="${escapeHtml(user.email)}">Save</button>
+    </div>
+  `).join("");
+}
+
+async function addStaffAccess(event) {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector("button[type='submit']");
+  button.disabled = true;
+  els.staffAccessMessage.textContent = "Adding...";
+  try {
+    await api("/api/staff-access", {
+      method: "POST",
+      body: JSON.stringify({
+        display_name: event.currentTarget.elements.display_name.value,
+        email: event.currentTarget.elements.email.value,
+        role: event.currentTarget.elements.role.value
+      })
+    });
+    event.currentTarget.reset();
+    await loadStaffAccess();
+    els.staffAccessMessage.textContent = "Staff access added.";
+  } catch (error) {
+    els.staffAccessMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveStaffAccess(email, button) {
+  const row = button.closest("[data-staff-row]");
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Saving...";
+  els.staffAccessMessage.textContent = "";
+  try {
+    const existing = state.staffUsers.find(user => user.email === email);
+    const updated = await api(`/api/staff-access/${encodeURIComponent(email)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        display_name: existing?.display_name || "",
+        role: row.querySelector("[data-staff-role]").value,
+        active: row.querySelector("[data-staff-active]").checked
+      })
+    });
+    state.staffUsers = state.staffUsers.map(user => user.email === email ? updated : user);
+    renderStaffAccess();
+    els.staffAccessMessage.textContent = `${email} was updated.`;
+  } catch (error) {
+    els.staffAccessMessage.textContent = error.message;
+    await loadStaffAccess().catch(() => {});
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function renderTermSettings() {
   if (!els.currentTermLabel) return;
   const term = state.currentTerm;
@@ -255,6 +422,8 @@ function renderNotificationSettings() {
 }
 
 function switchView(name) {
+  if (state.currentUser?.role === "teacher" && name !== "teacher-dashboard") return;
+  if (name === "settings" && state.currentUser?.role !== "tech_admin") return;
   els.studentListPanel.open = false;
   window.scrollTo({ top: 0, behavior: "instant" });
   els.navButtons.forEach(button => {
@@ -984,7 +1153,6 @@ async function showStudentDetail(id) {
         <div class="meta">
           <span>${student.grade ? `Grade ${escapeHtml(student.grade)}` : "Grade not set"}</span>
           <span>${student.student_number ? `ID ${escapeHtml(student.student_number)}` : "No student ID"}</span>
-          <span>${student.device_asset_tag ? `Device ${escapeHtml(student.device_asset_tag)}` : "No device tag"}</span>
         </div>
       </div>
       <div class="detail-actions">
@@ -1017,8 +1185,6 @@ async function showStudentDetail(id) {
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
       <div class="detail-stat"><span>Major</span><strong>${Number(student.counts.major_count || 0)}</strong></div>
       <div class="detail-stat"><span>Warnings</span><strong>${Number(student.counts.warning_count || 0)}</strong></div>
-      <div class="detail-stat"><span>Parent/guardian</span><strong>${escapeHtml(student.guardian_name || "Not set")}</strong></div>
-      <div class="detail-stat"><span>Contact</span><strong>${escapeHtml(student.guardian_contact || "Not set")}</strong></div>
       <div class="detail-stat ${isArchived ? "" : "full-width"}"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
       ${isArchived ? `<div class="detail-stat full-width"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>` : ""}
     </div>
@@ -1839,6 +2005,9 @@ document.addEventListener("click", event => {
   if (retireInfractionButton) {
     retireInfractionType(Number(retireInfractionButton.dataset.retireInfraction), retireInfractionButton.dataset.infractionLabel);
   }
+
+  const saveStaffButton = event.target.closest("[data-save-staff]");
+  if (saveStaffButton) saveStaffAccess(saveStaffButton.dataset.saveStaff, saveStaffButton);
 });
 
 document.addEventListener("change", event => {
@@ -1875,7 +2044,9 @@ els.startTermButton.addEventListener("click", startNewTerm);
 els.notificationForm.addEventListener("submit", saveNotificationSettings);
 els.infractionTypeForm.addEventListener("submit", createInfractionType);
 els.templateForm.addEventListener("submit", uploadTemplate);
+els.staffAccessForm.addEventListener("submit", addStaffAccess);
 els.logoutButton.addEventListener("click", logout);
+els.teacherStudentSearch.addEventListener("input", renderTeacherDashboard);
 els.incidentForm.addEventListener("change", event => {
   if (event.target.name === "severity") renderInfractionOptions();
   if (event.target.name === "entry_type") updateIncidentEntryTypeUi();
