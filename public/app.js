@@ -46,6 +46,13 @@ const els = {
   signedInName: document.querySelector("#signed-in-name"),
   signedInEmail: document.querySelector("#signed-in-email"),
   signedInRole: document.querySelector("#signed-in-role"),
+  workspaceSwitcher: document.querySelector("#workspace-switcher"),
+  workspaceMenu: document.querySelector("#workspace-menu"),
+  workspaceIndicator: document.querySelector("#workspace-switch-indicator"),
+  workspaceBrandMark: document.querySelector("#workspace-brand-mark"),
+  workspaceBrandTitle: document.querySelector("#workspace-brand-title"),
+  workspaceBrandSubtitle: document.querySelector("#workspace-brand-subtitle"),
+  workspaceOptions: document.querySelectorAll("[data-workspace-view]"),
   logoutButton: document.querySelector("#logout-button"),
   navButtons: document.querySelectorAll(".nav-button"),
   teacherNav: document.querySelector("[data-teacher-nav]"),
@@ -161,6 +168,10 @@ function showApp(user) {
   els.teacherNav.hidden = !isTeacher;
   els.techNavButtons.forEach(button => { button.hidden = isTeacher; });
   els.adminNavButtons.forEach(button => { button.hidden = !isAdmin; });
+  els.workspaceSwitcher.disabled = isTeacher;
+  els.workspaceSwitcher.setAttribute("aria-label", isTeacher ? "Tech Violations" : "Switch technology workspace");
+  els.workspaceIndicator.hidden = isTeacher;
+  els.workspaceMenu.hidden = true;
   switchView(isTeacher ? "teacher-dashboard" : "dashboard");
   populateReporterEmail();
 }
@@ -489,6 +500,17 @@ function switchView(name) {
   els.views.forEach(view => {
     view.classList.toggle("active", view.id === `${name}-view`);
   });
+  const repairWorkspace = name === "repairs";
+  els.workspaceBrandMark.textContent = repairWorkspace ? "CR" : "TV";
+  els.workspaceBrandTitle.textContent = repairWorkspace ? "Chromebook Repairs" : "Tech Violations";
+  els.workspaceBrandSubtitle.textContent = repairWorkspace ? "Repair desk tracker" : "Student support tracker";
+  els.workspaceOptions.forEach(option => {
+    const selected = option.dataset.workspaceView === (repairWorkspace ? "repairs" : "dashboard");
+    option.classList.toggle("active", selected);
+    option.setAttribute("aria-current", selected ? "page" : "false");
+  });
+  els.workspaceMenu.hidden = true;
+  els.workspaceSwitcher.setAttribute("aria-expanded", "false");
 }
 
 function renderMetrics() {
@@ -2000,6 +2022,27 @@ async function logout() {
 }
 
 document.addEventListener("click", event => {
+  const workspaceOption = event.target.closest("[data-workspace-view]");
+  if (workspaceOption) {
+    const targetView = workspaceOption.dataset.workspaceView;
+    switchView(targetView);
+    if (targetView === "repairs" && typeof loadRepairWorkspace === "function") loadRepairWorkspace();
+    return;
+  }
+
+  if (event.target.closest("#workspace-switcher")) {
+    if (!els.workspaceSwitcher.disabled) {
+      els.workspaceMenu.hidden = !els.workspaceMenu.hidden;
+      els.workspaceSwitcher.setAttribute("aria-expanded", String(!els.workspaceMenu.hidden));
+    }
+    return;
+  }
+
+  if (!event.target.closest("#workspace-menu")) {
+    els.workspaceMenu.hidden = true;
+    els.workspaceSwitcher.setAttribute("aria-expanded", "false");
+  }
+
   const nav = event.target.closest("[data-view]");
   if (nav) switchView(nav.dataset.view);
 

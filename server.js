@@ -8,6 +8,7 @@ const { OAuth2Client } = require("google-auth-library");
 const initSqlJs = require("sql.js");
 const nodemailer = require("nodemailer");
 const { createStudentHistoryPdf, historyFilename } = require("./student-history-pdf.cjs");
+const { createChromebookRepairs } = require("./chromebook-repairs.cjs");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
@@ -15,6 +16,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const TEMPLATE_DIR = path.join(DATA_DIR, "templates");
 const DOCUMENT_DIR = path.join(DATA_DIR, "documents");
+const REPAIR_PHOTO_DIR = process.env.REPAIR_PHOTO_DIR || path.join(DATA_DIR, "repair-photos");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
@@ -63,6 +65,7 @@ fs.mkdirSync(DOCUMENT_DIR, { recursive: true });
 
 let db;
 let statements;
+let chromebookRepairs;
 
 function persistDb() {
   fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
@@ -1697,6 +1700,8 @@ async function handleApi(req, res, url) {
 
   requireTechAccess(currentUser);
 
+  if (await chromebookRepairs.handleApi(req, res, url, currentUser)) return;
+
   const adminMutation =
     (url.pathname === "/api/settings/notifications" && req.method !== "GET")
     || (url.pathname.startsWith("/api/infraction-types") && req.method !== "GET")
@@ -2256,7 +2261,7 @@ function serveStatic(req, res, url) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
-    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/templates/") || url.pathname.startsWith("/documents/")) {
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/templates/") || url.pathname.startsWith("/documents/") || url.pathname.startsWith("/repair-photos/")) {
       await handleApi(req, res, url);
     } else {
       serveStatic(req, res, url);
@@ -2276,6 +2281,16 @@ async function main() {
   execSql("PRAGMA foreign_keys = ON;");
   migrate();
   statements = prepareStatements();
+  chromebookRepairs = createChromebookRepairs({
+    getDb: () => db,
+    persistDb,
+    readBody,
+    sendJson,
+    sendFile,
+    photoDirectory: REPAIR_PHOTO_DIR,
+    addAudit: (entityType, entityId, message) => statements.addAudit.run(entityType, entityId, message)
+  });
+  chromebookRepairs.migrate();
 
   server.listen(PORT, () => {
     console.log(`Technology tracker running at http://localhost:${PORT}`);

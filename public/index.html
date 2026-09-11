@@ -27,11 +27,24 @@
 
     <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">TV</div>
-          <div>
-            <h1>Tech Violations</h1>
-            <p>Student support tracker</p>
+        <div class="workspace-switcher-wrap">
+          <button class="brand workspace-switcher" id="workspace-switcher" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Switch technology workspace">
+            <span class="brand-mark" id="workspace-brand-mark">TV</span>
+            <span class="workspace-brand-copy">
+              <strong id="workspace-brand-title">Tech Violations</strong>
+              <small id="workspace-brand-subtitle">Student support tracker</small>
+            </span>
+            <span class="workspace-switch-indicator" id="workspace-switch-indicator" aria-hidden="true">⇄</span>
+          </button>
+          <div class="workspace-menu" id="workspace-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-workspace-view="dashboard">
+              <span class="workspace-option-mark">TV</span>
+              <span><strong>Tech Violations</strong><small>Interventions and follow-ups</small></span>
+            </button>
+            <button type="button" role="menuitem" data-workspace-view="repairs">
+              <span class="workspace-option-mark">CR</span>
+              <span><strong>Chromebook Repair Tracker</strong><small>Repairs, fees, photos, and parts</small></span>
+            </button>
           </div>
         </div>
         <div class="user-panel">
@@ -289,6 +302,96 @@
           </section>
         </section>
 
+        <section class="view" id="repairs-view">
+          <div class="page-heading">
+            <div>
+              <h2>Chromebook Repair Tracker</h2>
+              <p>Log repairs, search device history, record fees and parent notices, and manage parts inventory.</p>
+            </div>
+            <button class="primary-button" id="new-repair-button" type="button">New repair</button>
+          </div>
+
+          <div class="metric-grid repair-metric-grid" aria-label="Repair desk summary">
+            <section class="metric">
+              <span>Open repairs</span>
+              <strong id="repair-metric-open">0</strong>
+            </section>
+            <section class="metric">
+              <span>Completed repairs</span>
+              <strong id="repair-metric-complete">0</strong>
+            </section>
+            <section class="metric">
+              <span>Fees recorded</span>
+              <strong id="repair-metric-fees">$0.00</strong>
+            </section>
+            <section class="metric">
+              <span>Low-stock parts</span>
+              <strong id="repair-metric-low-stock">0</strong>
+            </section>
+          </div>
+
+          <section class="panel repair-history-panel">
+            <div class="panel-heading repair-toolbar">
+              <div>
+                <h3>Repair history</h3>
+                <p class="panel-note" id="repair-history-count">Loading repair records...</p>
+              </div>
+              <div class="repair-filters">
+                <label>
+                  Search
+                  <input id="repair-search" type="search" placeholder="Student, ID, asset, repair, or status">
+                </label>
+                <label>
+                  Status
+                  <select id="repair-status-filter">
+                    <option value="">All statuses</option>
+                    <option value="Open">Open</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Complete">Complete</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table class="repair-table">
+                <thead>
+                  <tr>
+                    <th>Student / device</th>
+                    <th>Repair</th>
+                    <th>Opened</th>
+                    <th>Status</th>
+                    <th>Fee / notice</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="repair-table-body"></tbody>
+              </table>
+            </div>
+            <div id="repair-empty" class="empty" hidden>No matching repair records.</div>
+          </section>
+
+          <details class="panel collapsible-panel repair-inventory-panel">
+            <summary>Parts Inventory</summary>
+            <div class="panel-heading">
+              <div>
+                <h3>Parts inventory</h3>
+                <p class="panel-note">Parts used on a repair automatically reduce the on-hand quantity.</p>
+              </div>
+            </div>
+            <form id="repair-part-form" class="repair-part-form">
+              <label>Part name <input name="name" required maxlength="100"></label>
+              <label>SKU <input name="sku" maxlength="100"></label>
+              <label>On hand <input name="quantity" type="number" min="0" value="0" required></label>
+              <label>Low-stock at <input name="low_stock_threshold" type="number" min="0" value="2" required></label>
+              <label>Unit cost <input name="unit_cost" type="number" min="0" step="0.01" value="0"></label>
+              <button class="primary-button" type="submit">Add part</button>
+              <span id="repair-part-message" role="status"></span>
+            </form>
+            <div id="repair-inventory-list" class="repair-inventory-list"></div>
+          </details>
+          <div id="repair-page-message" class="page-message" role="status" aria-live="polite"></div>
+        </section>
+
         <section class="view" id="settings-view">
           <div class="page-heading">
             <div>
@@ -450,7 +553,109 @@
         </section>
       </main>
     </div>
+
+    <dialog id="repair-dialog" class="repair-dialog">
+      <form id="repair-form">
+        <div class="dialog-heading">
+          <div>
+            <h2>New Chromebook repair</h2>
+            <p>Use the shared TechViolations roster and device assignment.</p>
+          </div>
+          <button type="button" class="quiet-button" data-close-repair-dialog aria-label="Close">Close</button>
+        </div>
+        <div class="form-grid">
+          <label class="full-width">
+            Student
+            <select name="student_id" id="repair-student-select" required></select>
+          </label>
+          <label>
+            Asset tag
+            <input name="asset_tag" id="repair-asset-tag" maxlength="100" placeholder="Uses roster assignment by default">
+          </label>
+          <label>
+            Repair type
+            <select name="repair_type_id" id="repair-type-select" required></select>
+          </label>
+          <label class="full-width" id="repair-other-type-field" hidden>
+            Other repair type
+            <input name="other_type" maxlength="100">
+          </label>
+          <label>
+            Starting status
+            <select name="status">
+              <option value="Open">Open</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Complete">Complete</option>
+            </select>
+          </label>
+          <label>
+            Staff CC <span class="optional-label">optional</span>
+            <input name="staff_cc" type="email" maxlength="200">
+          </label>
+          <label class="full-width">
+            Incident and repair notes
+            <textarea name="incident_notes" rows="5" maxlength="3000" required></textarea>
+          </label>
+          <fieldset class="full-width repair-parts-fieldset">
+            <legend>Parts used <span class="optional-label">optional</span></legend>
+            <div id="repair-parts-options" class="repair-parts-options"></div>
+          </fieldset>
+          <label class="repair-fee-toggle">
+            <input name="damage_fee" type="checkbox" id="repair-damage-fee">
+            Record a damage fee
+          </label>
+          <label id="repair-fee-field" hidden>
+            Fee amount
+            <input name="fee_amount" type="number" min="0" step="0.01" value="0">
+          </label>
+          <label class="full-width">
+            Damage photos <span class="optional-label">optional, up to 8 MB each</span>
+            <input name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple>
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="primary-button" type="submit">Save repair</button>
+          <button class="quiet-button" type="button" data-close-repair-dialog>Cancel</button>
+          <span id="repair-form-message" role="status"></span>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="repair-notice-dialog" class="repair-dialog repair-notice-dialog">
+      <form id="repair-notice-form">
+        <input type="hidden" name="repair_id">
+        <div class="dialog-heading">
+          <div>
+            <h2>Parent repair notice</h2>
+            <p id="repair-notice-summary"></p>
+          </div>
+          <button type="button" class="quiet-button" data-close-repair-notice aria-label="Close">Close</button>
+        </div>
+        <label>
+          Parent email
+          <input name="parent_email" type="email" required>
+        </label>
+        <label>
+          Staff CC <span class="optional-label">optional</span>
+          <input name="staff_cc" type="email">
+        </label>
+        <label>
+          Subject
+          <input name="subject" required>
+        </label>
+        <label>
+          Message
+          <textarea name="message" rows="9" required></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="primary-button" type="submit">Open email and mark notified</button>
+          <button class="quiet-button" type="button" data-close-repair-notice>Cancel</button>
+          <span id="repair-notice-message" role="status"></span>
+        </div>
+      </form>
+    </dialog>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="/app.js" defer></script>
+    <script src="/repairs.js" defer></script>
   </body>
 </html>
