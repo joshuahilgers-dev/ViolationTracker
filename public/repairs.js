@@ -102,6 +102,9 @@ async function loadRepairWorkspace({ quiet = false } = {}) {
   if (!quiet) repairEls.historyCount.textContent = "Loading repair records...";
   try {
     const data = await api("/api/repairs/bootstrap");
+    if (Number(data.repairApiVersion || 0) < 2) {
+      throw new Error("The repair server is still running an older version. Restart the Technology Violation Tracker service, then refresh this page.");
+    }
     repairState.students = data.students || [];
     repairState.repairTypes = data.repairTypes || [];
     repairState.parts = data.parts || [];
@@ -114,6 +117,8 @@ async function loadRepairWorkspace({ quiet = false } = {}) {
     renderRepairWorkspace();
   } catch (error) {
     repairEls.historyCount.textContent = "Unable to load repair records.";
+    repairEls.feeScheduleSettings.innerHTML = `<div class="empty">Unable to load the Chromebook Care fee schedule.</div>`;
+    repairEls.feeScheduleMessage.textContent = error.message;
     setRepairMessage(error.message, true);
   } finally {
     repairState.loading = false;
@@ -254,6 +259,8 @@ function repairRecordCard(record) {
       <div class="repair-row-actions repair-record-actions">
         ${kind === "Repair" && record.status !== "Complete" ? `<button class="quiet-button compact-button" type="button" data-repair-status="${record.id}" data-next-status="${escapeHtml(nextStatus)}">${record.status === "Open" ? "Start work" : "Complete"}</button>` : ""}
         ${kind === "Repair" && record.status === "Complete" ? `<button class="primary-button compact-button" type="button" data-repair-edit="${record.id}" data-reopen="1">Reopen</button>` : `<button class="quiet-button compact-button" type="button" data-repair-edit="${record.id}">Edit</button>`}
+        <button class="quiet-button compact-button" type="button" data-repair-photo-trigger="${record.id}">Add photos</button>
+        <input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple hidden data-repair-photo-input="${record.id}" aria-label="Add photos to ${escapeHtml(repairRecordLabel(record))}">
         ${hasFee ? `<button class="quiet-button compact-button" type="button" data-repair-notice="${record.id}">${Number(record.parent_notified) ? "Send updated notice" : "ParentSquare notice"}</button>` : ""}
         ${hasFee && Number(record.fee_amount_cents) > 0 ? `<a class="quiet-button compact-button button-link" href="${SKYWARD_URL}" target="_blank" rel="noopener">Open Skyward</a>` : ""}
         ${hasFee && Number(record.fee_amount_cents) > 0 ? `<button class="quiet-button compact-button" type="button" data-repair-skyward="${record.id}" data-entered="${Number(record.skyward_entered) ? "0" : "1"}" ${!Number(record.parent_notified) && !Number(record.skyward_entered) ? 'disabled title="Record the ParentSquare notice first"' : ""}>${Number(record.skyward_entered) ? "Undo Skyward entry" : !Number(record.parent_notified) ? "Notify parent first" : "Mark entered in Skyward"}</button>` : ""}
@@ -361,7 +368,6 @@ function openRepairDialog(record = null, { reopen = false } = {}) {
     } else {
       repairEls.deviceTypeSelect.value = record.device_type || repairState.fineDeviceTypes[0] || "";
     }
-    repairEls.form.elements.staff_cc.value = record.staff_cc || "";
     repairEls.form.elements.incident_notes.value = record.incident_notes || "";
     repairEls.damageFee.checked = Boolean(Number(record.damage_fee));
     repairEls.feeScheduleSelect.value = String(record.fee_schedule_id || repairState.feeSchedule[0]?.id || "");
@@ -403,6 +409,7 @@ function openRepairDialog(record = null, { reopen = false } = {}) {
     repairEls.chromecareStatus.value = "Unknown";
   }
   updateRepairKindUi();
+  if (!record) applySuggestedFeeForRepairType();
   updateRepairOtherType();
   if (!repairEls.dialog.open) repairEls.dialog.showModal();
   if (!record) repairEls.studentSearch.focus();
@@ -457,6 +464,15 @@ function selectSuggestedScheduleForRepairType() {
   });
   if (schedule) repairEls.feeScheduleSelect.value = String(schedule.id);
   updateSuggestedRepairFee();
+}
+
+function applySuggestedFeeForRepairType() {
+  if (repairEls.form.elements.record_kind.value !== "Repair" || repairEls.form.elements.record_id.value) return;
+  const type = repairState.repairTypes.find(item => String(item.id) === repairEls.typeSelect.value);
+  const automaticallyAssessed = type?.name === "Screen" || type?.name === "Keyboard";
+  repairEls.damageFee.checked = automaticallyAssessed;
+  updateRepairKindUi();
+  if (automaticallyAssessed) selectSuggestedScheduleForRepairType();
 }
 
 function selectedRepairParts() {
@@ -535,6 +551,34 @@ async function compressRepairPhoto(file) {
   throw new Error(`${file.name} could not be reduced below 2 MB. Try a smaller image.`);
 }
 
+async function prepareRepairPhotos(photos, onProgress) {
+  const prepared = [];
+  for (const [index, photo] of photos.entries()) {
+    onProgress(photo.size >= MAX_REPAIR_PHOTO_BYTES
+      ? `Compressing photo ${index + 1} of ${photos.length}...`
+      : `Preparing photo ${index + 1} of ${photos.length}...`);
+    prepared.push(await compressRepairPhoto(photo));
+  }
+  return prepared;
+}
+
+async function uploadPreparedRepairPhotos(recordId, photos, onProgress) {
+  let uploaded = 0;
+  for (const [index, photo] of photos.entries()) {
+    onProgress(`Uploading photo ${index + 1} of ${photos.length}...`);
+    await api(`/api/repairs/${recordId}/photos`, {
+      method: "POST",
+      body: JSON.stringify({
+        original_name: photo.name,
+        mime_type: photo.type,
+        content_base64: await fileAsBase64(photo)
+      })
+    });
+    uploaded += 1;
+  }
+  return uploaded;
+}
+
 async function submitRepair(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -542,13 +586,7 @@ async function submitRepair(event) {
   const photos = [...form.elements.photos.files];
   submitButton.disabled = true;
   try {
-    const preparedPhotos = [];
-    for (const [index, photo] of photos.entries()) {
-      repairEls.formMessage.textContent = photo.size >= MAX_REPAIR_PHOTO_BYTES
-        ? `Compressing photo ${index + 1} of ${photos.length}...`
-        : `Preparing photo ${index + 1} of ${photos.length}...`;
-      preparedPhotos.push(await compressRepairPhoto(photo));
-    }
+    const preparedPhotos = await prepareRepairPhotos(photos, message => { repairEls.formMessage.textContent = message; });
 
     const recordId = Number(form.elements.record_id.value || 0);
     const isFine = form.elements.record_kind.value === "Fine";
@@ -565,7 +603,6 @@ async function submitRepair(event) {
         other_type: form.elements.other_type.value,
         incident_notes: form.elements.incident_notes.value,
         status: form.elements.status.value,
-        staff_cc: form.elements.staff_cc.value,
         damage_fee: hasFee,
         fee_schedule_id: hasFee ? Number(form.elements.fee_schedule_id.value) : null,
         chromecare_status: form.elements.chromecare_status.value,
@@ -576,18 +613,8 @@ async function submitRepair(event) {
       })
     });
     const savedId = recordId || Number(result.id);
-    let uploaded = 0;
-    for (const photo of preparedPhotos) {
-      await api(`/api/repairs/${savedId}/photos`, {
-        method: "POST",
-        body: JSON.stringify({
-          original_name: photo.name,
-          mime_type: photo.type,
-          content_base64: await fileAsBase64(photo)
-        })
-      });
-      uploaded += 1;
-    }
+    const uploaded = await uploadPreparedRepairPhotos(savedId, preparedPhotos, message => { repairEls.formMessage.textContent = message; });
+    repairState.expandedStudents.add(Number(form.elements.student_id.value));
     repairEls.dialog.close();
     await loadRepairWorkspace({ quiet: true });
     const resetMessage = result.financialReset ? " ParentSquare and Skyward were reset because the amount or coverage changed." : "";
@@ -624,10 +651,7 @@ function openRepairNotice(repairId) {
   const careText = repairCareLabel(repair);
   repairEls.noticeForm.reset();
   repairEls.noticeForm.elements.repair_id.value = repair.id;
-  repairEls.noticeForm.elements.parent_email.value = String(repair.parent_email || "").includes("@") ? repair.parent_email : "";
-  repairEls.noticeForm.elements.staff_cc.value = repair.staff_cc || "";
   repairEls.noticeDialog.querySelector("h2").textContent = `Parent ${kind.toLowerCase()} notice`;
-  repairEls.noticeForm.elements.subject.value = `Chromebook ${kind.toLowerCase()} notice for ${repairStudentName(repair)}`;
   const chargeText = Number(repair.fee_amount_cents) > 0
     ? `The assessed amount is ${amount}.`
     : "The assessed amount is $0.00, so no Skyward charge is needed.";
@@ -659,11 +683,9 @@ async function submitRepairNotice(event) {
   repairEls.noticeMessage.textContent = "Recording notice...";
   try {
     const repairId = Number(form.elements.repair_id.value);
-    const parentEmail = form.elements.parent_email.value.trim();
-    const staffCc = form.elements.staff_cc.value.trim();
     await api(`/api/repairs/${repairId}/notice`, {
       method: "POST",
-      body: JSON.stringify({ parent_email: parentEmail, staff_cc: staffCc })
+      body: JSON.stringify({})
     });
     repairEls.noticeDialog.close();
     await loadRepairWorkspace({ quiet: true });
@@ -680,7 +702,7 @@ async function markRepairSkyward(button) {
   button.disabled = true;
   try {
     await api(`/api/repairs/${Number(button.dataset.repairSkyward)}/skyward`, {
-      method: "POST",
+      method: "PATCH",
       body: JSON.stringify({ entered })
     });
     await loadRepairWorkspace({ quiet: true });
@@ -723,7 +745,25 @@ function renderFeeScheduleSettings() {
       <label>Without Care <input name="without_care" type="number" min="0" step="0.01" value="${(Number(item.without_chromecare_cents) / 100).toFixed(2)}" required></label>
       <label>With Care <input name="with_care" type="number" min="0" step="0.01" value="${(Number(item.with_chromecare_cents) / 100).toFixed(2)}" required></label>
       <button class="quiet-button compact-button" type="submit">Save</button>
-    </form>`).join("") : `<div class="empty">Open the Chromebook Repairs workspace once to load the fee schedule.</div>`;
+    </form>`).join("") : `<div class="empty">Loading the Chromebook Care fee schedule...</div>`;
+}
+
+async function uploadPhotosFromRepairCard(input) {
+  const recordId = Number(input.dataset.repairPhotoInput);
+  const photos = [...input.files];
+  if (!recordId || !photos.length) return;
+  input.disabled = true;
+  try {
+    const prepared = await prepareRepairPhotos(photos, message => setRepairMessage(message));
+    const uploaded = await uploadPreparedRepairPhotos(recordId, prepared, message => setRepairMessage(message));
+    await loadRepairWorkspace({ quiet: true });
+    setRepairMessage(`${uploaded} photo${uploaded === 1 ? "" : "s"} added.`);
+  } catch (error) {
+    setRepairMessage(error.message, true);
+  } finally {
+    input.value = "";
+    input.disabled = false;
+  }
 }
 
 async function saveFeeSchedule(event) {
@@ -837,7 +877,7 @@ repairEls.studentSearch.addEventListener("keydown", event => {
 repairEls.studentSelect.addEventListener("change", event => selectRepairStudent(event.target.value));
 repairEls.typeSelect.addEventListener("change", () => {
   updateRepairOtherType();
-  if (repairEls.damageFee.checked) selectSuggestedScheduleForRepairType();
+  applySuggestedFeeForRepairType();
 });
 repairEls.form.querySelectorAll('input[name="record_kind"]').forEach(input => input.addEventListener("change", event => {
   repairEls.damageFee.checked = event.target.value === "Fine";
@@ -863,6 +903,10 @@ document.addEventListener("click", event => {
     const record = repairState.repairs.find(item => Number(item.id) === Number(editButton.dataset.repairEdit));
     if (record) openRepairDialog(record, { reopen: editButton.dataset.reopen === "1" });
   }
+  const photoTrigger = event.target.closest("[data-repair-photo-trigger]");
+  if (photoTrigger) {
+    document.querySelector(`[data-repair-photo-input="${Number(photoTrigger.dataset.repairPhotoTrigger)}"]`)?.click();
+  }
   const noticeButton = event.target.closest("[data-repair-notice]");
   if (noticeButton) openRepairNotice(Number(noticeButton.dataset.repairNotice));
   const skywardButton = event.target.closest("[data-repair-skyward]");
@@ -873,6 +917,17 @@ document.addEventListener("click", event => {
   if (partButton) adjustRepairPart(partButton);
   const settingsButton = event.target.closest('[data-view="settings"]');
   if (settingsButton && !repairState.loaded) loadRepairWorkspace({ quiet: true });
+});
+
+document.addEventListener("change", event => {
+  const photoInput = event.target.closest("[data-repair-photo-input]");
+  if (photoInput) uploadPhotosFromRepairCard(photoInput);
+});
+
+document.addEventListener("tracker:viewchange", event => {
+  if (["repairs", "settings"].includes(event.detail?.name) && !repairState.loaded) {
+    loadRepairWorkspace({ quiet: event.detail.name === "settings" });
+  }
 });
 
 repairEls.dialog.addEventListener("click", event => {

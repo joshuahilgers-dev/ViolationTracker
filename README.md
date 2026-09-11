@@ -185,10 +185,12 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - Start a repair or fine by finding a student by name or scanning their student ID.
 - Repairs and fines are grouped into one expandable history row per student.
 - Chromebook Care pricing is suggested from the editable fee schedule in Settings; each individual amount remains editable.
+- Screen and keyboard repairs automatically select their matching fee schedule; staff can still clear or edit the assessment before saving.
 - ParentSquare notices use a prepared copy/paste message and open `https://www.parentsquare.com/signin` in a separate tab.
 - Skyward entry is tracked separately and opens `https://skyward.iscorp.com/WisconsinRapidsWIStu/Home` in a separate tab. Parent notification must be recorded first.
 - Changing a fee, fine type, or Chromebook Care status resets ParentSquare and Skyward completion so the corrected amount is processed again.
 - Completed repairs can be reopened in the editor to update details and add photos.
+- Photos can also be added later from an expanded repair record on the dashboard.
 - Permanent deletion removes the repair or fine and its photos, restores used parts to inventory, and leaves a minimal deletion audit event.
 
 ## Database Tables

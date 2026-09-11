@@ -199,7 +199,7 @@ button {
   width: 25px;
   height: 25px;
   flex: 0 0 auto;
-  transform: translateY(5px);
+  transform: translateY(13px);
   place-items: center;
   border: 1px solid #526273;
   border-radius: 999px;

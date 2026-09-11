@@ -511,6 +511,7 @@ function switchView(name) {
   });
   els.workspaceMenu.hidden = true;
   els.workspaceSwitcher.setAttribute("aria-expanded", "false");
+  document.dispatchEvent(new CustomEvent("tracker:viewchange", { detail: { name } }));
 }
 
 function renderMetrics() {

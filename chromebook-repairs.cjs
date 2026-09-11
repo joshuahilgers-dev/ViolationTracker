@@ -278,7 +278,7 @@ function createChromebookRepairs({
       WHERE active = 1
       ORDER BY sort_order, label
     `);
-    return { students, repairTypes, parts, repairs, photos, partUsage, feeSchedule, fineDeviceTypes: FINE_DEVICE_TYPES };
+    return { repairApiVersion: 2, students, repairTypes, parts, repairs, photos, partUsage, feeSchedule, fineDeviceTypes: FINE_DEVICE_TYPES };
   }
 
   function createPart(body, actor) {
@@ -512,9 +512,9 @@ function createChromebookRepairs({
     if (!repair) throw Object.assign(new Error("Repair was not found."), { status: 404 });
     transaction(() => run(`
       UPDATE chromebook_repairs
-      SET parent_notified = 1, parent_notified_at = ?, parent_email = ?, staff_cc = ?, updated_at = ?
+      SET parent_notified = 1, parent_notified_at = ?, updated_at = ?
       WHERE id = ?
-    `, [new Date().toISOString(), text(body.parent_email) || null, text(body.staff_cc) || null, new Date().toISOString(), repairId]));
+    `, [new Date().toISOString(), new Date().toISOString(), repairId]));
     addAudit("chromebook_repair", repairId, `${actor} recorded parent notification for repair.`);
   }
 
@@ -650,7 +650,7 @@ function createChromebookRepairs({
     }
 
     const skywardMatch = url.pathname.match(/^\/api\/repairs\/(\d+)\/skyward$/);
-    if (req.method === "POST" && skywardMatch) {
+    if ((req.method === "POST" || req.method === "PATCH") && skywardMatch) {
       markSkywardEntered(requirePositiveId(skywardMatch[1], "Repair or fine"), await readBody(req), actor);
       sendJson(res, 200, { ok: true });
       return true;

@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$ServerPath = Join-Path $ProjectRoot "server.js"
 $LogDir = Join-Path $ProjectRoot "logs"
 $OutLog = Join-Path $LogDir "server.out.log"
 $ErrLog = Join-Path $LogDir "server.err.log"
@@ -18,8 +19,7 @@ $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 "[$timestamp] Starting Technology Violation Tracker from $ProjectRoot with $nodePath" | Add-Content -Path $OutLog
 
 try {
-  $command = "`"$nodePath`" server.js >> `"$OutLog`" 2>> `"$ErrLog`""
-  & $env:ComSpec /d /s /c $command
+  & $nodePath $ServerPath 1>> $OutLog 2>> $ErrLog
   $exitCode = $LASTEXITCODE
 } catch {
   $exitCode = 1
