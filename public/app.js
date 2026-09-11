@@ -18,10 +18,11 @@ const state = {
   selectedStatusKey: null
 };
 
-const statusOrder = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor"];
+const statusOrder = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
 const statusLabels = {
   no_violations: "No violations",
   monitor: "Monitor",
+  warnings: "Warnings documented",
   reflection: "Digital Impact Reflection",
   success_contract: "Technology Success Contract",
   device_restriction: "5 school-day restriction",
@@ -682,9 +683,15 @@ function statusAckKey(key) {
   return `vtrack.status.${key}.acknowledgedIncidentId`;
 }
 
+function studentsForStatus(key) {
+  if (key === "warnings") {
+    return state.students.filter(student => student.status.key === "no_violations" && student.warning_count > 0);
+  }
+  return state.students.filter(student => student.status.key === key);
+}
+
 function latestIncidentIdForStatus(key) {
-  return state.students
-    .filter(student => student.status.key === key)
+  return studentsForStatus(key)
     .reduce((latest, student) => Math.max(latest, Number(student.last_incident_id || 0)), 0);
 }
 
@@ -703,7 +710,7 @@ function acknowledgeStatusNew(key) {
 
 function renderStatusGroups() {
   els.statusGroups.innerHTML = statusOrder.map(key => {
-    const students = state.students.filter(student => student.status.key === key);
+    const students = studentsForStatus(key);
     const hasNew = statusHasNew(key);
     return `
       <button class="status-group status-group-button" type="button" data-status-key="${key}">
@@ -1017,12 +1024,14 @@ function renderTemplates() {
 function renderStatusStudents(key) {
   state.selectedStatusKey = key;
   acknowledgeStatusNew(key);
-  const students = state.students.filter(student => student.status.key === key);
+  const students = studentsForStatus(key);
   els.statusTitle.textContent = statusLabels[key] || "Current Step";
-  els.statusSubtitle.textContent = students.length === 1 ? "1 student currently in this step." : `${students.length} students currently in this step.`;
+  els.statusSubtitle.textContent = key === "warnings"
+    ? (students.length === 1 ? "1 student has a current-term warning and no active intervention step." : `${students.length} students have current-term warnings and no active intervention step.`)
+    : (students.length === 1 ? "1 student currently in this step." : `${students.length} students currently in this step.`);
   els.statusStudentList.innerHTML = students.length
     ? students.map(student => statusStudentRow(student, key)).join("")
-    : `<div class="empty">No students currently in this step.</div>`;
+    : `<div class="empty">${key === "warnings" ? "No students currently have warnings without an active intervention step." : "No students currently in this step."}</div>`;
   renderStatusGroups();
   switchView("status");
 }
