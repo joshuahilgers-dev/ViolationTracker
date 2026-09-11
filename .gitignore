@@ -4,6 +4,7 @@ data/*.sqlite-wal
 data/repair-photos/
 *.log
 .push-worktree/
+.codex-test-repairs/
 node_modules/
 .npm-cache/
 .env

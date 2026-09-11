@@ -1,6 +1,6 @@
 # Technology Violation Tracker
 
-Local staff web app for tracking student technology violations, intervention steps, and follow-up actions.
+Local staff web app for tracking student technology violations, intervention steps, follow-up actions, Chromebook repairs, and device fines.
 
 ## Requirements
 
@@ -33,6 +33,24 @@ npm start
 ```
 
 The production start command runs `node server.js`.
+
+## Windows Startup Task
+
+Use the included startup wrapper for Task Scheduler instead of launching `npm start` directly. The wrapper always starts from the project folder and writes logs to `logs/server.out.log` and `logs/server.err.log`, which makes restart failures much easier to diagnose.
+
+From an elevated PowerShell window in this project folder, install or refresh the startup task:
+
+```powershell
+.\scripts\install-startup-task.ps1
+```
+
+Then start it immediately without rebooting:
+
+```powershell
+Start-ScheduledTask -TaskName "Technology Violation Tracker"
+```
+
+The task runs as `SYSTEM`, starts two minutes after Windows startup, and is configured to restart if the Node process exits unexpectedly. If the server has machine-level environment variables for Google sign-in or email, reboot or open a new elevated PowerShell window after setting them.
 
 ## Google Staff Sign-In
 
@@ -162,6 +180,17 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - Fourth total violation: queue a five school-day Chromebook restriction and a re-entry check.
 - Fifth or later violation: queue admin review and parent contact.
 
+## Chromebook Repair And Fine Workflow
+
+- Start a repair or fine by finding a student by name or scanning their student ID.
+- Repairs and fines are grouped into one expandable history row per student.
+- Chromebook Care pricing is suggested from the editable fee schedule in Settings; each individual amount remains editable.
+- ParentSquare notices use a prepared copy/paste message and open `https://www.parentsquare.com/signin` in a separate tab.
+- Skyward entry is tracked separately and opens `https://skyward.iscorp.com/WisconsinRapidsWIStu/Home` in a separate tab. Parent notification must be recorded first.
+- Changing a fee, fine type, or Chromebook Care status resets ParentSquare and Skyward completion so the corrected amount is processed again.
+- Completed repairs can be reopened in the editor to update details and add photos.
+- Permanent deletion removes the repair or fine and its photos, restores used parts to inventory, and leaves a minimal deletion audit event.
+
 ## Database Tables
 
 - `students`: student profile, guardian contact, and device tag.
@@ -169,6 +198,10 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - `incidents`: teacher/staff violation reports.
 - `actions`: parent contact, reflection upload, contract, restriction, re-entry, and admin follow-ups.
 - `audit_log`: basic record of important changes.
+- `chromebook_repairs`: repair and fine records, Chromebook Care status, parent-notice status, and Skyward-entry status.
+- `repair_fee_schedule`: editable with/without Chromebook Care amounts.
+- `repair_inventory_parts` and `repair_part_usage`: parts stock and usage history.
+- `repair_photos`: locally stored repair-photo metadata.
 
 ## Moving To PostgreSQL Or SQL Server
 

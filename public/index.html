@@ -306,9 +306,9 @@
           <div class="page-heading">
             <div>
               <h2>Chromebook Repair Tracker</h2>
-              <p>Log repairs, search device history, record fees and parent notices, and manage parts inventory.</p>
+              <p>Log repairs and fines, track parent notices and Skyward entry, and manage parts inventory.</p>
             </div>
-            <button class="primary-button" id="new-repair-button" type="button">New repair</button>
+            <button class="primary-button" id="new-repair-button" type="button">New repair or fine</button>
           </div>
 
           <div class="metric-grid repair-metric-grid" aria-label="Repair desk summary">
@@ -321,8 +321,12 @@
               <strong id="repair-metric-complete">0</strong>
             </section>
             <section class="metric">
-              <span>Fees recorded</span>
+              <span>Fees and fines</span>
               <strong id="repair-metric-fees">$0.00</strong>
+            </section>
+            <section class="metric urgent">
+              <span>Needs Skyward entry</span>
+              <strong id="repair-metric-skyward">0</strong>
             </section>
             <section class="metric">
               <span>Low-stock parts</span>
@@ -333,7 +337,7 @@
           <section class="panel repair-history-panel">
             <div class="panel-heading repair-toolbar">
               <div>
-                <h3>Repair history</h3>
+                <h3>Repair and fine history</h3>
                 <p class="panel-note" id="repair-history-count">Loading repair records...</p>
               </div>
               <div class="repair-filters">
@@ -357,11 +361,11 @@
                 <thead>
                   <tr>
                     <th>Student / device</th>
-                    <th>Repair</th>
-                    <th>Opened</th>
-                    <th>Status</th>
-                    <th>Fee / notice</th>
-                    <th>Actions</th>
+                    <th>Activity</th>
+                    <th>Latest</th>
+                    <th>Open work</th>
+                    <th>Financial workflow</th>
+                    <th>Details</th>
                   </tr>
                 </thead>
                 <tbody id="repair-table-body"></tbody>
@@ -430,6 +434,12 @@
               <span><strong>Tech Admin:</strong> full tracker and settings</span>
             </div>
             <div id="staff-access-list" class="staff-access-list"></div>
+          </details>
+          <details class="panel collapsible-panel fee-schedule-panel">
+            <summary>Chromebook Care Fee Schedule</summary>
+            <p class="panel-note">These amounts are suggested when a repair fee or fine is recorded. Staff can still adjust an individual amount when needed.</p>
+            <div id="repair-fee-schedule-settings" class="fee-schedule-settings"></div>
+            <div id="repair-fee-schedule-message" class="page-message" role="status" aria-live="polite"></div>
           </details>
           <section class="panel">
             <div class="panel-heading">
@@ -556,23 +566,37 @@
 
     <dialog id="repair-dialog" class="repair-dialog">
       <form id="repair-form">
+        <input type="hidden" name="record_id">
         <div class="dialog-heading">
           <div>
-            <h2>New Chromebook repair</h2>
-            <p>Use the shared TechViolations roster and device assignment.</p>
+            <h2 id="repair-dialog-title">New repair or fine</h2>
+            <p id="repair-dialog-subtitle">Use the shared TechViolations roster and device assignment.</p>
           </div>
           <button type="button" class="quiet-button" data-close-repair-dialog aria-label="Close">Close</button>
         </div>
         <div class="form-grid">
-          <label class="full-width">
+          <label class="full-width repair-student-field">
             Student
-            <select name="student_id" id="repair-student-select" required></select>
+            <input id="repair-student-search" list="repair-student-options" autocomplete="off" placeholder="Type a name or scan a student ID">
+            <datalist id="repair-student-options"></datalist>
+            <select name="student_id" id="repair-student-select" required>
+              <option value="">Or choose from full list</option>
+            </select>
           </label>
+          <fieldset class="segmented-field full-width repair-kind-field">
+            <legend>Record as</legend>
+            <label><input type="radio" name="record_kind" value="Repair" checked> Repair</label>
+            <label><input type="radio" name="record_kind" value="Fine"> Fine</label>
+          </fieldset>
           <label>
             Asset tag
             <input name="asset_tag" id="repair-asset-tag" maxlength="100" placeholder="Uses roster assignment by default">
           </label>
-          <label>
+          <label id="repair-device-type-field" hidden>
+            Device or item
+            <select name="device_type" id="repair-device-type-select"></select>
+          </label>
+          <label id="repair-type-field">
             Repair type
             <select name="repair_type_id" id="repair-type-select" required></select>
           </label>
@@ -580,7 +604,7 @@
             Other repair type
             <input name="other_type" maxlength="100">
           </label>
-          <label>
+          <label id="repair-status-field">
             Starting status
             <select name="status">
               <option value="Open">Open</option>
@@ -593,28 +617,51 @@
             <input name="staff_cc" type="email" maxlength="200">
           </label>
           <label class="full-width">
-            Incident and repair notes
+            <span id="repair-notes-label">Incident and repair notes</span>
             <textarea name="incident_notes" rows="5" maxlength="3000" required></textarea>
           </label>
           <fieldset class="full-width repair-parts-fieldset">
             <legend>Parts used <span class="optional-label">optional</span></legend>
             <div id="repair-parts-options" class="repair-parts-options"></div>
           </fieldset>
+          <label id="repair-chromecare-field">
+            Chromebook Care
+            <select name="chromecare_status" id="repair-chromecare-status">
+              <option value="Unknown">Not confirmed</option>
+              <option value="Yes">Purchased</option>
+              <option value="No">Not purchased</option>
+            </select>
+          </label>
           <label class="repair-fee-toggle">
             <input name="damage_fee" type="checkbox" id="repair-damage-fee">
             Record a damage fee
           </label>
-          <label id="repair-fee-field" hidden>
-            Fee amount
-            <input name="fee_amount" type="number" min="0" step="0.01" value="0">
-          </label>
-          <label class="full-width">
-            Damage photos <span class="optional-label">optional, up to 8 MB each</span>
+          <div id="repair-financial-fields" class="repair-financial-fields full-width" hidden>
+            <label>
+              Fee or fine type
+              <select name="fee_schedule_id" id="repair-fee-schedule-select"></select>
+            </label>
+            <label>
+              Amount
+              <input name="fee_amount" type="number" min="0" step="0.01" value="0">
+            </label>
+            <label class="repair-workflow-checkbox" hidden id="repair-parent-notified-edit">
+              <input name="parent_notified" type="checkbox">
+              ParentSquare notice sent
+            </label>
+            <label class="repair-workflow-checkbox" hidden id="repair-skyward-entered-edit">
+              <input name="skyward_entered" type="checkbox">
+              Entered in Skyward
+            </label>
+          </div>
+          <div id="repair-existing-photos" class="repair-existing-photos full-width" hidden></div>
+          <label class="full-width" id="repair-photo-field">
+            Damage photos <span class="optional-label">optional; automatically compressed to under 2 MB each</span>
             <input name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple>
           </label>
         </div>
         <div class="form-actions">
-          <button class="primary-button" type="submit">Save repair</button>
+          <button class="primary-button" id="repair-save-button" type="submit">Save record</button>
           <button class="quiet-button" type="button" data-close-repair-dialog>Cancel</button>
           <span id="repair-form-message" role="status"></span>
         </div>
@@ -632,8 +679,8 @@
           <button type="button" class="quiet-button" data-close-repair-notice aria-label="Close">Close</button>
         </div>
         <label>
-          Parent email
-          <input name="parent_email" type="email" required>
+          Parent email <span class="optional-label">optional reference</span>
+          <input name="parent_email" type="email">
         </label>
         <label>
           Staff CC <span class="optional-label">optional</span>
@@ -648,7 +695,9 @@
           <textarea name="message" rows="9" required></textarea>
         </label>
         <div class="form-actions">
-          <button class="primary-button" type="submit">Open email and mark notified</button>
+          <button class="quiet-button" id="repair-copy-notice" type="button">Copy message</button>
+          <a class="primary-button button-link" href="https://www.parentsquare.com/signin" target="_blank" rel="noopener">Open ParentSquare</a>
+          <button class="success-button" type="submit">Mark as notified</button>
           <button class="quiet-button" type="button" data-close-repair-notice>Cancel</button>
           <span id="repair-notice-message" role="status"></span>
         </div>
