@@ -18,6 +18,8 @@ $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
 "[$timestamp] Starting Technology Violation Tracker from $ProjectRoot with $nodePath" | Add-Content -Path $OutLog
 
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 try {
   & $nodePath $ServerPath 1>> $OutLog 2>> $ErrLog
   $exitCode = $LASTEXITCODE
@@ -25,6 +27,8 @@ try {
   $exitCode = 1
   $errorTimestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
   "[$errorTimestamp] Startup failed: $($_.Exception.Message)" | Add-Content -Path $ErrLog
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
 }
 
 $stopTimestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
