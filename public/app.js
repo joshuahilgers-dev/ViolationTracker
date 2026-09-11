@@ -1104,6 +1104,7 @@ function incidentRows(incidents, allowRemoval = true) {
         </h4>
         ${allowRemoval && !incident.canceled_at ? `
           <div class="row-actions">
+            <button class="quiet-button compact-button" data-edit-incident-notes="${incident.id}" data-incident-notes="${encodeURIComponent(String(incident.notes || ""))}" data-entry-type="${entryType}">Edit notes</button>
             ${entryType === "violation" ? `<button class="quiet-button compact-button" data-convert-incident="${incident.id}">Convert to warning</button>` : ""}
             <button class="danger-button compact-button" data-cancel-incident="${incident.id}" data-entry-type="${entryType}">Remove ${entryType}</button>
           </div>
@@ -1744,6 +1745,74 @@ async function completeAction(id) {
   }
 }
 
+function editIncidentNotes(id, currentNotes, entryType = "violation") {
+  const dialog = document.createElement("dialog");
+  const entryLabel = entryType === "warning" ? "warning" : "violation";
+  dialog.className = "decision-dialog incident-notes-dialog";
+  dialog.innerHTML = `
+    <form>
+      <h3>Edit ${entryLabel} notes</h3>
+      <label>
+        Notes
+        <textarea name="notes" rows="8" required>${escapeHtml(currentNotes)}</textarea>
+      </label>
+      <p class="panel-note">Add the missing information or correct the existing notes.</p>
+      <div class="decision-actions">
+        <button type="submit" class="primary-button">Save notes</button>
+        <button type="button" class="quiet-button" data-cancel-notes-edit>Cancel</button>
+        <span role="status"></span>
+      </div>
+    </form>
+  `;
+  const form = dialog.querySelector("form");
+  const textarea = form.elements.notes;
+  const submitButton = form.querySelector("button[type='submit']");
+  const status = form.querySelector("[role='status']");
+  const closeDialog = () => {
+    dialog.close();
+    dialog.remove();
+  };
+  dialog.addEventListener("cancel", event => {
+    event.preventDefault();
+    closeDialog();
+  });
+  dialog.addEventListener("click", event => {
+    if (event.target.closest("[data-cancel-notes-edit]")) closeDialog();
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const notes = textarea.value.trim();
+    if (!notes) {
+      status.textContent = "Enter notes before saving.";
+      textarea.focus();
+      return;
+    }
+    submitButton.disabled = true;
+    status.textContent = "Saving...";
+    try {
+      await api(`/api/incidents/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ notes })
+      });
+      closeDialog();
+      await loadBootstrap();
+      if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+      if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+    } catch (error) {
+      if (dialog.isConnected) {
+        status.textContent = error.message;
+        submitButton.disabled = false;
+      } else {
+        window.alert(`Notes were saved, but the screen could not refresh: ${error.message}`);
+      }
+    }
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
 async function cancelIncident(id, entryType = "violation") {
   const label = entryType === "warning" ? "warning" : "violation";
   const reason = window.prompt(`Remove this ${label}? It will remain in the student's history as removed. Enter a reason:`);
@@ -2062,6 +2131,15 @@ document.addEventListener("click", event => {
   const cancelIncidentButton = event.target.closest("[data-cancel-incident]");
   if (cancelIncidentButton) {
     cancelIncident(Number(cancelIncidentButton.dataset.cancelIncident), cancelIncidentButton.dataset.entryType);
+  }
+
+  const editIncidentNotesButton = event.target.closest("[data-edit-incident-notes]");
+  if (editIncidentNotesButton) {
+    editIncidentNotes(
+      Number(editIncidentNotesButton.dataset.editIncidentNotes),
+      decodeURIComponent(editIncidentNotesButton.dataset.incidentNotes || ""),
+      editIncidentNotesButton.dataset.entryType
+    );
   }
 
   const convertIncidentButton = event.target.closest("[data-convert-incident]");

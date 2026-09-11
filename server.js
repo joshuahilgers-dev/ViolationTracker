@@ -596,6 +596,7 @@ function prepareStatements() {
   `),
   getAction: prepare("SELECT * FROM actions WHERE id = ?"),
   getIncident: prepare("SELECT * FROM incidents WHERE id = ?"),
+  updateIncidentNotes: prepare("UPDATE incidents SET notes = ? WHERE id = ?"),
   cancelIncident: prepare(`
     UPDATE incidents
     SET canceled_at = CURRENT_TIMESTAMP,
@@ -2024,6 +2025,21 @@ async function handleApi(req, res, url) {
     );
     statements.addAudit.run("incident", incidentId, `Violation was converted to a warning by ${convertedBy}: ${reason}. Current step: ${currentStatus.label}.`);
     return sendJson(res, 200, { ok: true, currentStatus });
+  }
+
+  const incidentMatch = url.pathname.match(/^\/api\/incidents\/(\d+)$/);
+  if (req.method === "PATCH" && incidentMatch) {
+    const incidentId = Number(incidentMatch[1]);
+    const incident = statements.getIncident.get(incidentId);
+    if (!incident) return sendJson(res, 404, { error: "History entry not found" });
+    if (incident.canceled_at) {
+      return sendJson(res, 400, { error: "Notes cannot be edited on a removed history entry." });
+    }
+    const body = await readBody(req);
+    const notes = required(body.notes, "Notes");
+    statements.updateIncidentNotes.run(notes, incidentId);
+    statements.addAudit.run("incident", incidentId, `Notes were updated by ${currentUser.email}.`);
+    return sendJson(res, 200, { ok: true, notes });
   }
 
   if (req.method === "POST" && url.pathname === "/api/incidents") {

@@ -1276,6 +1276,24 @@ textarea {
   color: #475569;
 }
 
+.incident-notes-dialog form,
+.incident-notes-dialog label {
+  display: grid;
+  gap: 8px;
+}
+
+.incident-notes-dialog label {
+  font-weight: 650;
+}
+
+.incident-notes-dialog textarea {
+  min-height: 150px;
+}
+
+.incident-notes-dialog .panel-note {
+  margin: 0;
+}
+
 .decision-actions {
   display: flex;
   flex-wrap: wrap;
