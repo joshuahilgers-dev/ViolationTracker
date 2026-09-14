@@ -69,9 +69,10 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
       if (!rows.length) return;
       section(title);
       for (const item of rows) record(
-        `${String(item.created_at || "").slice(0, 10)} | ${stepLabels[item.target_step] || item.target_step}`,
-        [item.term_name && `Term: ${item.term_name}`, item.adjusted_by && `Adjusted by: ${item.adjusted_by}`],
-        `Reason: ${item.reason || "Not recorded"}`);
+        `${String(item.created_at || "").slice(0, 10)} | ${stepLabels[item.target_step] || item.target_step}${item.ended_at ? " | ENDED" : " | ACTIVE OVERRIDE"}`,
+        [item.term_name && `Term: ${item.term_name}`, item.adjusted_by && `Adjusted by: ${item.adjusted_by}`,
+          item.ended_at && `Ended: ${item.ended_at}${item.ended_by ? ` by ${item.ended_by}` : ""}`],
+        `Reason: ${item.reason || "Not recorded"}${item.ended_reason ? `\nEnd reason: ${item.ended_reason}` : ""}`);
     }
     line("WRPS | TECHNOLOGY VIOLATION TRACKER", true, 10);
     doc.moveDown(0.5);

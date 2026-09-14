@@ -300,6 +300,7 @@ function migrate() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
       incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL,
+      step_adjustment_id INTEGER REFERENCES step_adjustments(id) ON DELETE SET NULL,
       action_type TEXT NOT NULL,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'complete')),
@@ -350,6 +351,9 @@ function migrate() {
       target_step TEXT NOT NULL,
       reason TEXT NOT NULL,
       adjusted_by TEXT,
+      ended_at TEXT,
+      ended_by TEXT,
+      ended_reason TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -389,6 +393,10 @@ function migrate() {
   ensureColumn("incidents", "converted_by", "TEXT");
   ensureColumn("incidents", "conversion_reason", "TEXT");
   ensureColumn("infraction_types", "seed_key", "TEXT");
+  ensureColumn("actions", "step_adjustment_id", "INTEGER");
+  ensureColumn("step_adjustments", "ended_at", "TEXT");
+  ensureColumn("step_adjustments", "ended_by", "TEXT");
+  ensureColumn("step_adjustments", "ended_reason", "TEXT");
   ensureCurrentTerm();
   syncInfractionTypes();
   syncSeedStaffUsers();
@@ -660,8 +668,8 @@ function prepareStatements() {
     WHERE incident_id = ? AND action_type = ?
   `),
   insertAction: prepare(`
-    INSERT OR IGNORE INTO actions (student_id, incident_id, action_type, title, due_on, owner, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO actions (student_id, incident_id, step_adjustment_id, action_type, title, due_on, owner, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateStudentAssetTag: prepare(`
     UPDATE students SET device_asset_tag = ? WHERE id = ?
@@ -749,7 +757,7 @@ function prepareStatements() {
   adjustmentsForStatus: prepare(`
     SELECT *
     FROM step_adjustments
-    WHERE student_id = ? AND term_id = ?
+    WHERE student_id = ? AND term_id = ? AND ended_at IS NULL
     ORDER BY created_at, id
   `),
   listAdjustmentsForStudent: prepare(`
@@ -763,6 +771,22 @@ function prepareStatements() {
     INSERT INTO step_adjustments (student_id, term_id, target_step, reason, adjusted_by)
     VALUES (?, ?, ?, ?, ?)
   `),
+  getStepAdjustment: prepare("SELECT * FROM step_adjustments WHERE id = ?"),
+  endActiveStepAdjustments: prepare(`
+    UPDATE step_adjustments
+    SET ended_at = CURRENT_TIMESTAMP, ended_by = ?, ended_reason = ?
+    WHERE student_id = ? AND term_id = ? AND id != ? AND ended_at IS NULL
+  `),
+  deleteStepAdjustment: prepare("DELETE FROM step_adjustments WHERE id = ?"),
+  actionsForStepAdjustment: prepare("SELECT * FROM actions WHERE step_adjustment_id = ? ORDER BY id"),
+  legacyActionsForStepAdjustment: prepare(`
+    SELECT * FROM actions
+    WHERE student_id = ? AND incident_id IS NULL AND step_adjustment_id IS NULL AND created_at = ?
+    ORDER BY id
+  `),
+  documentsForAction: prepare("SELECT * FROM student_documents WHERE action_id = ? ORDER BY id"),
+  deleteDocumentsForAction: prepare("DELETE FROM student_documents WHERE action_id = ?"),
+  deleteAction: prepare("DELETE FROM actions WHERE id = ?"),
   listStaffUsers: prepare(`
     SELECT email, display_name, role, active, created_at, updated_at, updated_by, last_login_at
     FROM staff_users
@@ -873,14 +897,24 @@ function statusFromIncidentHistory(incidents) {
   return STATUS_DETAILS[key];
 }
 
-function statusForStudent(studentId) {
+function automaticStatusForStudent(studentId) {
   const term = currentTerm();
-  const automaticStatus = statusFromIncidentHistory(statements.incidentsForStatus.all(studentId, term.id));
-  const adjustmentStatus = statements.adjustmentsForStatus
+  return statusFromIncidentHistory(statements.incidentsForStatus.all(studentId, term.id));
+}
+
+function activeAdjustmentForStudent(studentId) {
+  const term = currentTerm();
+  return statements.adjustmentsForStatus
     .all(studentId, term.id)
-    .map(adjustment => STATUS_DETAILS[adjustment.target_step])
-    .filter(Boolean)
-    .reduce((highest, status) => (status.level > highest.level ? status : highest), STATUS_DETAILS.no_violations);
+    .map(adjustment => ({ adjustment, status: STATUS_DETAILS[adjustment.target_step] }))
+    .filter(item => item.status)
+    .reduce((highest, item) => (!highest || item.status.level > highest.status.level ? item : highest), null)?.adjustment || null;
+}
+
+function statusForStudent(studentId) {
+  const automaticStatus = automaticStatusForStudent(studentId);
+  const activeAdjustment = activeAdjustmentForStudent(studentId);
+  const adjustmentStatus = activeAdjustment ? STATUS_DETAILS[activeAdjustment.target_step] : STATUS_DETAILS.no_violations;
   return adjustmentStatus.level > automaticStatus.level ? adjustmentStatus : automaticStatus;
 }
 
@@ -958,33 +992,49 @@ function addSchoolDays(dateText, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus, currentStatus) {
+function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus, currentStatus, stepAdjustmentId = null) {
   if (currentStatus.level <= previousStatus.level) return;
 
   if (currentStatus.key === "reflection") {
-    queueAction(studentId, incidentId, "digital_reflection", "Digital Impact Reflection due", occurredOn, "Teacher", "Upload or send completed reflection through ParentSquare.");
-    queueAction(studentId, incidentId, "parent_contact_reflection", "Parent contact: reflection", occurredOn, "Teacher", "Notify parent/guardian that the reflection step was assigned.");
+    queueAction(studentId, incidentId, "digital_reflection", "Digital Impact Reflection due", occurredOn, "Teacher", "Upload or send completed reflection through ParentSquare.", stepAdjustmentId);
+    queueAction(studentId, incidentId, "parent_contact_reflection", "Parent contact: reflection", occurredOn, "Teacher", "Notify parent/guardian that the reflection step was assigned.", stepAdjustmentId);
   }
 
   if (currentStatus.key === "success_contract") {
-    queueAction(studentId, incidentId, "success_contract", "Technology Success Contract due", occurredOn, "Teacher", "Review contract expectations with student and send home.");
-    queueAction(studentId, incidentId, "parent_contact_contract", "Parent contact: success contract", occurredOn, "Teacher", "Share the contract and current violation history.");
+    queueAction(studentId, incidentId, "success_contract", "Technology Success Contract due", occurredOn, "Teacher", "Review contract expectations with student and send home.", stepAdjustmentId);
+    queueAction(studentId, incidentId, "parent_contact_contract", "Parent contact: success contract", occurredOn, "Teacher", "Share the contract and current violation history.", stepAdjustmentId);
   }
 
   if (currentStatus.key === "device_restriction") {
     const returnDate = addSchoolDays(occurredOn, 5);
-    queueAction(studentId, incidentId, "device_restriction", "Start 5 school-day device restriction", returnDate, "Library/Tech", "Hold Chromebook except when a digital component is essential.");
-    queueAction(studentId, incidentId, "reentry_check", "Schedule re-entry check", returnDate, "Teacher/Admin", "Confirm student can resume regular device access after the restriction.");
+    queueAction(studentId, incidentId, "device_restriction", "Start 5 school-day device restriction", returnDate, "Library/Tech", "Hold Chromebook except when a digital component is essential.", stepAdjustmentId);
+    queueAction(studentId, incidentId, "reentry_check", "Schedule re-entry check", returnDate, "Teacher/Admin", "Confirm student can resume regular device access after the restriction.", stepAdjustmentId);
   }
 
   if (currentStatus.key === "admin_review") {
-    queueAction(studentId, incidentId, "admin_review", "Admin review needed", occurredOn, "Admin", "Determine next steps, including possible parent conversation or re-entry meeting.");
-    queueAction(studentId, incidentId, "parent_contact_admin", "Parent contact: admin review", occurredOn, "Admin", "Document parent/guardian communication for the additional violation.");
+    queueAction(studentId, incidentId, "admin_review", "Admin review needed", occurredOn, "Admin", "Determine next steps, including possible parent conversation or re-entry meeting.", stepAdjustmentId);
+    queueAction(studentId, incidentId, "parent_contact_admin", "Parent contact: admin review", occurredOn, "Admin", "Document parent/guardian communication for the additional violation.", stepAdjustmentId);
   }
 }
 
-function queueAction(studentId, incidentId, actionType, title, dueOn, owner, notes) {
-  statements.insertAction.run(studentId, incidentId, actionType, title, dueOn, owner, notes);
+function queueAction(studentId, incidentId, actionType, title, dueOn, owner, notes, stepAdjustmentId = null) {
+  statements.insertAction.run(studentId, incidentId, stepAdjustmentId, actionType, title, dueOn, owner, notes);
+}
+
+function reconcileOpenActionsForLowerStep(studentId, currentStatus, reason, todayText) {
+  const closeNote = `Closed after the administrative step was lowered: ${reason}`;
+  for (const action of statements.openActionsForStudent.all(studentId)) {
+    const actionLevel = WORKFLOW_ACTION_LEVELS[action.action_type] || 0;
+    if (actionLevel > currentStatus.level && action.action_type !== "return_chromebook") {
+      statements.closeOpenActionForRemoval.run(todayText, closeNote, closeNote, action.id);
+    }
+  }
+}
+
+function queueImmediateChromebookReturnIfNeeded(studentId, previousStatus, currentStatus, todayText) {
+  if (previousStatus.level < STATUS_DETAILS.device_restriction.level || currentStatus.level >= STATUS_DETAILS.device_restriction.level) return;
+  if (statements.nextReturnActionForStudent.get(studentId)) return;
+  queueAction(studentId, null, "return_chromebook", "Return Chromebook to student", todayText, "Library/Tech", "Return the Chromebook because the administrative restriction was lowered or ended.");
 }
 
 function reconcileOpenActionsAfterIncidentNoLongerCounts(studentId, incidentId, reason, todayText, changeDescription) {
@@ -1916,6 +1966,8 @@ async function handleApi(req, res, url) {
       ...student,
       counts,
       status: statusForStudent(id),
+      automaticStatus: automaticStatusForStudent(id),
+      activeAdjustment: activeAdjustmentForStudent(id),
       incidents,
       currentIncidents,
       previousIncidents,
@@ -1969,12 +2021,20 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const targetStep = required(body.target_step, "Adjusted step");
     const targetStatus = STATUS_DETAILS[targetStep];
-    if (!targetStatus || !["reflection", "success_contract", "device_restriction", "admin_review"].includes(targetStep)) {
-      return sendJson(res, 400, { error: "Choose a valid higher step." });
+    if (!targetStatus || !["monitor", "reflection", "success_contract", "device_restriction", "admin_review"].includes(targetStep)) {
+      return sendJson(res, 400, { error: "Choose a valid intervention step." });
     }
     const currentStatus = statusForStudent(id);
-    if (targetStatus.level <= currentStatus.level) {
-      return sendJson(res, 400, { error: "Choose a step higher than the student's current step." });
+    const automaticStatus = automaticStatusForStudent(id);
+    const activeAdjustment = activeAdjustmentForStudent(id);
+    if (targetStatus.level < automaticStatus.level) {
+      return sendJson(res, 400, { error: `The step cannot be set below the calculated minimum: ${automaticStatus.label}.` });
+    }
+    if (targetStatus.key === currentStatus.key) {
+      return sendJson(res, 400, { error: "Choose a different step." });
+    }
+    if (activeAdjustment && targetStatus.key === automaticStatus.key) {
+      return sendJson(res, 400, { error: "Use Return to calculated step to end the current override." });
     }
     const reason = required(body.reason, "Reason");
     const term = currentTerm();
@@ -1982,9 +2042,78 @@ async function handleApi(req, res, url) {
     const adjustedBy = session?.email || session?.name || "Unknown";
     const todayText = new Date().toISOString().slice(0, 10);
     const result = statements.insertStepAdjustment.run(id, term.id, targetStep, reason, adjustedBy);
-    ensureWorkflowActions(id, null, todayText, currentStatus, targetStatus);
-    statements.addAudit.run("step_adjustment", Number(result.lastInsertRowid), `Step adjusted to ${targetStatus.label} for ${student.first_name} ${student.last_name}.`);
+    const adjustmentId = Number(result.lastInsertRowid);
+    statements.endActiveStepAdjustments.run(adjustedBy, `Superseded by adjustment #${adjustmentId}: ${reason}`, id, term.id, adjustmentId);
+    if (targetStatus.level > currentStatus.level) {
+      ensureWorkflowActions(id, null, todayText, currentStatus, targetStatus, adjustmentId);
+    } else {
+      reconcileOpenActionsForLowerStep(id, targetStatus, reason, todayText);
+      ensureWorkflowActions(id, null, todayText, automaticStatus, targetStatus, adjustmentId);
+      queueImmediateChromebookReturnIfNeeded(id, currentStatus, targetStatus, todayText);
+    }
+    statements.addAudit.run("step_adjustment", adjustmentId, `Step adjusted from ${currentStatus.label} to ${targetStatus.label} for ${student.first_name} ${student.last_name}.`);
     return sendJson(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
+  }
+
+  const stepAdjustmentActionMatch = url.pathname.match(/^\/api\/step-adjustments\/(\d+)(?:\/(end))?$/);
+  if (req.method === "POST" && stepAdjustmentActionMatch && stepAdjustmentActionMatch[2] === "end") {
+    const adjustmentId = Number(stepAdjustmentActionMatch[1]);
+    const adjustment = statements.getStepAdjustment.get(adjustmentId);
+    if (!adjustment) return sendJson(res, 404, { error: "Step adjustment not found" });
+    if (adjustment.ended_at) return sendJson(res, 400, { error: "This step adjustment has already ended." });
+    const body = await readBody(req);
+    const reason = required(body.reason, "Reason");
+    const session = getSession(req);
+    const endedBy = session?.email || session?.name || "Unknown";
+    const previousStatus = statusForStudent(adjustment.student_id);
+    const todayText = new Date().toISOString().slice(0, 10);
+    statements.endActiveStepAdjustments.run(endedBy, reason, adjustment.student_id, adjustment.term_id, -1);
+    const currentStatus = statusForStudent(adjustment.student_id);
+    reconcileOpenActionsForLowerStep(adjustment.student_id, currentStatus, reason, todayText);
+    queueImmediateChromebookReturnIfNeeded(adjustment.student_id, previousStatus, currentStatus, todayText);
+    statements.addAudit.run("step_adjustment", adjustmentId, `Administrative override ended by ${endedBy}. Current step: ${currentStatus.label}.`);
+    return sendJson(res, 200, { ok: true, currentStatus });
+  }
+
+  if (req.method === "DELETE" && stepAdjustmentActionMatch && !stepAdjustmentActionMatch[2]) {
+    const adjustmentId = Number(stepAdjustmentActionMatch[1]);
+    const adjustment = statements.getStepAdjustment.get(adjustmentId);
+    if (!adjustment) return sendJson(res, 404, { error: "Step adjustment not found" });
+    const body = await readBody(req);
+    const linkedActions = statements.actionsForStepAdjustment.all(adjustmentId);
+    const legacyActions = statements.legacyActionsForStepAdjustment.all(adjustment.student_id, adjustment.created_at);
+    const actions = [...new Map([...linkedActions, ...legacyActions].map(action => [Number(action.id), action])).values()];
+    const actionDocuments = actions.flatMap(action => statements.documentsForAction.all(action.id));
+    const completedCount = actions.filter(action => action.status === "complete").length;
+    if ((completedCount || actionDocuments.length) && body.confirm_documented_work !== true) {
+      return sendJson(res, 409, {
+        error: "This adjustment has completed follow-up work or uploaded documents. Confirm again to permanently delete that work.",
+        code: "adjustment_has_documented_work",
+        completedCount,
+        documentCount: actionDocuments.length
+      });
+    }
+    const previousStatus = statusForStudent(adjustment.student_id);
+    for (const document of actionDocuments) {
+      if (document.stored_name) fs.rmSync(path.join(DOCUMENT_DIR, document.stored_name), { force: true });
+    }
+    for (const action of actions) {
+      statements.deleteDocumentsForAction.run(action.id);
+      statements.deleteAction.run(action.id);
+    }
+    statements.deleteStepAdjustment.run(adjustmentId);
+    const currentStatus = statusForStudent(adjustment.student_id);
+    const todayText = new Date().toISOString().slice(0, 10);
+    if (currentStatus.level < previousStatus.level) {
+      reconcileOpenActionsForLowerStep(adjustment.student_id, currentStatus, "The adjustment was deleted as entered in error.", todayText);
+      if (completedCount || actionDocuments.length) {
+        queueImmediateChromebookReturnIfNeeded(adjustment.student_id, previousStatus, currentStatus, todayText);
+      }
+    }
+    const session = getSession(req);
+    const deletedBy = session?.email || session?.name || "Unknown";
+    statements.addAudit.run("step_adjustment_deleted", adjustmentId, `Adjustment deleted as entered in error by ${deletedBy}.`);
+    return sendJson(res, 200, { ok: true, currentStatus });
   }
 
   const incidentCancelMatch = url.pathname.match(/^\/api\/incidents\/(\d+)\/cancel$/);
