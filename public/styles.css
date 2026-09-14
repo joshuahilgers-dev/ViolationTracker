@@ -1033,6 +1033,30 @@ button {
   background: #f8fafc;
 }
 
+.step-status-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.step-status-summary > div {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.step-status-summary span,
+.step-status-summary strong {
+  display: block;
+}
+
+.step-status-summary span {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .import-panel,
 .template-panel {
   margin-top: 18px;

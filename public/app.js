@@ -1157,49 +1157,60 @@ function profileDocumentCard(document) {
   `;
 }
 
-function stepAdjustmentOptions(currentKey) {
-  const currentLevel = statusLevels[currentKey] ?? 0;
-  return ["reflection", "success_contract", "device_restriction", "admin_review"]
-    .filter(key => statusLevels[key] > currentLevel)
+function stepAdjustmentOptions(student) {
+  const minimumLevel = statusLevels[student.automaticStatus?.key] ?? 0;
+  return ["monitor", "reflection", "success_contract", "device_restriction", "admin_review"]
+    .filter(key => statusLevels[key] >= minimumLevel && key !== student.status.key)
+    .filter(key => !student.activeAdjustment || key !== student.automaticStatus?.key)
     .map(key => `<option value="${key}">${escapeHtml(statusLabels[key])}</option>`)
     .join("");
 }
 
 function stepAdjustmentForm(student) {
-  const options = stepAdjustmentOptions(student.status.key);
-  if (!options) {
-    return `<div class="empty">This student is already at the highest current step.</div>`;
-  }
+  const options = stepAdjustmentOptions(student);
+  const activeAdjustment = student.activeAdjustment;
   return `
     <form class="step-adjust-form" data-step-adjust-form="${student.id}" hidden>
-      <label>
-        Adjust current step to
-        <select name="target_step" required>
-          <option value="">Choose higher step</option>
-          ${options}
-        </select>
-      </label>
-      <label>
-        Reason
-        <textarea name="reason" rows="3" required placeholder="Document why this student is being moved to a higher step."></textarea>
-      </label>
+      <div class="step-status-summary">
+        <div><span>Calculated step</span><strong>${escapeHtml(student.automaticStatus?.label || student.status.label)}</strong></div>
+        <div><span>Administrative override</span><strong>${escapeHtml(activeAdjustment ? statusLabels[activeAdjustment.target_step] : "None")}</strong></div>
+      </div>
+      ${options ? `
+        <label>
+          Change current step to
+          <select name="target_step" required>
+            <option value="">Choose a different step</option>
+            ${options}
+          </select>
+        </label>
+        <label>
+          Reason
+          <textarea name="reason" rows="3" required placeholder="Document why this student's current step is changing."></textarea>
+        </label>
+      ` : `<p class="panel-note">There are no other allowable override steps.</p>`}
       <div class="form-actions">
-        <button type="submit" class="primary-button">Save adjustment</button>
+        ${options ? `<button type="submit" class="primary-button">Save step change</button>` : ""}
+        ${activeAdjustment ? `<button type="button" class="quiet-button" data-end-step-adjustment="${activeAdjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[activeAdjustment.target_step])}">Return to calculated step</button>` : ""}
         <span role="status"></span>
       </div>
     </form>
   `;
 }
 
-function adjustmentRows(adjustments) {
+function adjustmentRows(adjustments, allowManagement = false) {
   return adjustments.length ? adjustments.map(adjustment => `
     <article class="incident-row">
-      <h4>${escapeHtml(String(adjustment.created_at || "").slice(0, 10))}: moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
+      <div class="incident-heading">
+        <h4>${escapeHtml(String(adjustment.created_at || "").slice(0, 10))}: moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
+        ${allowManagement ? `<button class="danger-button compact-button" data-delete-step-adjustment="${adjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}">Delete accidental adjustment</button>` : ""}
+      </div>
       <div class="meta">
         ${adjustment.term_name ? `<span>${escapeHtml(adjustment.term_name)}</span>` : ""}
         ${adjustment.adjusted_by ? `<span>Adjusted by ${escapeHtml(adjustment.adjusted_by)}</span>` : ""}
+        <span>${adjustment.ended_at ? "Ended" : "Active override"}</span>
       </div>
       <p>${escapeHtml(adjustment.reason)}</p>
+      ${adjustment.ended_at ? `<p><strong>Ended:</strong> ${escapeHtml(String(adjustment.ended_at).slice(0, 10))}${adjustment.ended_by ? ` by ${escapeHtml(adjustment.ended_by)}` : ""}. ${escapeHtml(adjustment.ended_reason || "")}</p>` : ""}
     </article>
   `).join("") : `<div class="empty">No administrative step adjustments recorded.</div>`;
 }
@@ -1207,6 +1218,7 @@ function adjustmentRows(adjustments) {
 async function showFollowups(studentId) {
   const student = await api(`/api/students/${studentId}`);
   state.selectedFollowupStudentId = studentId;
+  state.selectedStudentId = null;
   const actionsWithDocuments = attachActionDocuments(student.actions, student.documents || []);
   const openActions = actionsWithDocuments.filter(action => action.status === "open");
   els.followupsTitle.textContent = `${student.first_name} ${student.last_name}`;
@@ -1223,7 +1235,7 @@ async function showFollowups(studentId) {
           </div>
         </div>
         <div class="row-actions">
-          <button class="quiet-button" data-toggle-step-adjust="${student.id}">Adjust Current Step</button>
+          <button class="quiet-button" data-toggle-step-adjust="${student.id}">Manage Current Step</button>
           <button class="quiet-button" data-student-id="${student.id}">Open student record</button>
         </div>
       </div>
@@ -1241,6 +1253,7 @@ async function showStudentDetail(id) {
   const student = await api(`/api/students/${id}`);
   els.studentListPanel.open = false;
   state.selectedStudentId = id;
+  state.selectedFollowupStudentId = null;
   const isArchived = Number(student.active) === 0;
   const documents = student.documents || [];
   const actionsWithDocuments = attachActionDocuments(student.actions, documents);
@@ -1262,6 +1275,7 @@ async function showStudentDetail(id) {
       <div class="detail-actions">
         <div class="detail-primary-actions">
           <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
+          ${isArchived ? "" : `<button class="quiet-button" data-toggle-step-adjust="${student.id}">Manage Current Step</button>`}
           <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
         </div>
         ${isArchived ? `
@@ -1279,6 +1293,7 @@ async function showStudentDetail(id) {
         `}
       </div>
     </div>
+    ${isArchived ? "" : stepAdjustmentForm(student)}
     ${isArchived ? `
       <div class="archived-note">
         This student is archived and hidden from active workflows. Restore the student to enter new violations or warnings or include them in active lists.
@@ -1304,7 +1319,7 @@ async function showStudentDetail(id) {
     </div>
     <h4 class="section-title">Administrative Step Adjustments: Current Term</h4>
     <div class="timeline">
-      ${adjustmentRows(currentAdjustments)}
+        ${adjustmentRows(currentAdjustments, !isArchived)}
     </div>
     <details class="history-details">
       <summary>Technology History: Previous Terms (${previousIncidents.length})</summary>
@@ -1315,7 +1330,7 @@ async function showStudentDetail(id) {
     <details class="history-details">
       <summary>Administrative Step Adjustments: Previous Terms (${previousAdjustments.length})</summary>
       <div class="timeline">
-        ${adjustmentRows(previousAdjustments)}
+          ${adjustmentRows(previousAdjustments, !isArchived)}
       </div>
     </details>
     <h4 class="section-title">Stored Documents</h4>
@@ -1897,6 +1912,53 @@ async function submitStepAdjustment(form) {
   }
 }
 
+async function refreshAfterStepChange(studentId) {
+  await loadBootstrap();
+  if (state.selectedFollowupStudentId === studentId) await showFollowups(studentId);
+  else if (state.selectedStudentId === studentId) await showStudentDetail(studentId);
+}
+
+async function endStepAdjustment(adjustmentId, studentId, label) {
+  const reason = window.prompt(`Return this student from ${label} to the violation-calculated step? Enter the reason:`);
+  if (reason === null) return;
+  if (!reason.trim()) {
+    window.alert("Enter a reason before ending the override.");
+    return;
+  }
+  try {
+    await api(`/api/step-adjustments/${adjustmentId}/end`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason.trim() })
+    });
+    await refreshAfterStepChange(studentId);
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+async function deleteStepAdjustment(adjustmentId, studentId, label, confirmDocumentedWork = false) {
+  if (!confirmDocumentedWork) {
+    const confirmed = window.confirm(`Permanently delete the ${label} adjustment as an accidental entry? It will be removed from the student history and PDF.`);
+    if (!confirmed) return;
+  }
+  try {
+    await api(`/api/step-adjustments/${adjustmentId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm_documented_work: confirmDocumentedWork })
+    });
+    await refreshAfterStepChange(studentId);
+  } catch (error) {
+    if (error.code === "adjustment_has_documented_work" && !confirmDocumentedWork) {
+      const completed = Number(error.details?.completedCount || 0);
+      const documents = Number(error.details?.documentCount || 0);
+      const confirmed = window.confirm(`This adjustment has ${completed} completed follow-up${completed === 1 ? "" : "s"} and ${documents} uploaded document${documents === 1 ? "" : "s"}. Permanently delete that work too?`);
+      if (confirmed) await deleteStepAdjustment(adjustmentId, studentId, label, true);
+      return;
+    }
+    window.alert(error.message);
+  }
+}
+
 async function exportStudentHistory(button) {
   button.disabled = true;
   button.textContent = "Exporting...";
@@ -2187,6 +2249,24 @@ document.addEventListener("click", event => {
   if (adjustStepButton) {
     const form = document.querySelector(`[data-step-adjust-form="${adjustStepButton.dataset.toggleStepAdjust}"]`);
     if (form) form.hidden = !form.hidden;
+  }
+
+  const endStepAdjustmentButton = event.target.closest("[data-end-step-adjustment]");
+  if (endStepAdjustmentButton) {
+    endStepAdjustment(
+      Number(endStepAdjustmentButton.dataset.endStepAdjustment),
+      Number(endStepAdjustmentButton.closest("[data-step-adjust-form]")?.dataset.stepAdjustForm || state.selectedStudentId || state.selectedFollowupStudentId),
+      endStepAdjustmentButton.dataset.adjustmentLabel
+    );
+  }
+
+  const deleteStepAdjustmentButton = event.target.closest("[data-delete-step-adjustment]");
+  if (deleteStepAdjustmentButton) {
+    deleteStepAdjustment(
+      Number(deleteStepAdjustmentButton.dataset.deleteStepAdjustment),
+      Number(state.selectedStudentId || state.selectedFollowupStudentId),
+      deleteStepAdjustmentButton.dataset.adjustmentLabel
+    );
   }
 
   const followupButton = event.target.closest("[data-followup-student-id]");
