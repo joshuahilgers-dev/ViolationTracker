@@ -1450,6 +1450,12 @@ textarea {
   font-weight: 650;
 }
 
+.incident-document-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .document-library {
   display: grid;
   gap: 10px;

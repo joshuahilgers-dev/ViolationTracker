@@ -1090,12 +1090,18 @@ function statusStudentRow(student, key) {
   `;
 }
 
-function incidentRows(incidents, allowRemoval = true) {
+function incidentRows(incidents, allowRemoval = true, options = {}) {
+  const documents = options.documents || [];
+  const allowMonitorReflection = options.statusKey === "monitor";
   return incidents.length ? incidents.map(incident => {
     const entryType = incidentEntryType(incident);
     const entryLabel = entryType === "warning" ? "Warning" : `${incident.severity} violation`;
+    const incidentDocuments = documents.filter(document => Number(document.incident_id) === Number(incident.id));
+    const allowsReflectionUpload = allowRemoval
+      && !incident.canceled_at
+      && (entryType === "warning" || (allowMonitorReflection && incident.severity === "minor"));
     return `
-    <article class="incident-row ${entryType === "warning" ? "warning" : ""} ${incident.canceled_at ? "canceled" : ""}">
+    <article class="incident-row ${entryType === "warning" ? "warning" : ""} ${incident.canceled_at ? "canceled" : ""}" data-incident-id="${incident.id}">
       <div class="incident-heading">
         <h4>
           ${escapeHtml(incident.occurred_on)}: ${escapeHtml(entryLabel)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
@@ -1121,6 +1127,15 @@ function incidentRows(incidents, allowRemoval = true) {
       ${incident.notes ? `<p>${escapeHtml(incident.notes)}</p>` : ""}
       ${incident.conversion_reason ? `<p><strong>Conversion reason:</strong> ${escapeHtml(incident.conversion_reason)}</p>` : ""}
       ${incident.canceled_reason ? `<p><strong>Removal reason:</strong> ${escapeHtml(incident.canceled_reason)}</p>` : ""}
+      ${incidentDocuments.length ? documentList(incidentDocuments) : ""}
+      ${allowsReflectionUpload ? `
+        <div class="incident-document-actions">
+          <label class="upload-button">
+            <span>Upload Digital Impact Reflection</span>
+            <input type="file" data-incident-document-file="${incident.id}" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg">
+          </label>
+        </div>
+      ` : ""}
     </article>
   `;
   }).join("") : `<div class="empty">No warnings or violations recorded.</div>`;
@@ -1285,7 +1300,7 @@ async function showStudentDetail(id) {
     `}
     <h4 class="section-title">Technology History: Current Term</h4>
     <div class="timeline">
-      ${incidentRows(currentIncidents, !isArchived)}
+      ${incidentRows(currentIncidents, !isArchived, { documents, statusKey: student.status.key })}
     </div>
     <h4 class="section-title">Administrative Step Adjustments: Current Term</h4>
     <div class="timeline">
@@ -1294,7 +1309,7 @@ async function showStudentDetail(id) {
     <details class="history-details">
       <summary>Technology History: Previous Terms (${previousIncidents.length})</summary>
       <div class="timeline">
-        ${incidentRows(previousIncidents, !isArchived)}
+        ${incidentRows(previousIncidents, false, { documents })}
       </div>
     </details>
     <details class="history-details">
@@ -1984,6 +1999,29 @@ async function uploadActionDocument(actionId, file) {
   }
 }
 
+async function uploadIncidentReflection(incidentId, file) {
+  if (!file) return;
+  const incidentRow = document.querySelector(`[data-incident-id="${incidentId}"]`);
+  const label = incidentRow?.querySelector(".incident-document-actions .upload-button span");
+  const originalText = label?.textContent || "Upload Digital Impact Reflection";
+  if (label) label.textContent = "Uploading...";
+  try {
+    await api(`/api/incidents/${incidentId}/documents`, {
+      method: "POST",
+      body: JSON.stringify({
+        original_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    if (label) label.textContent = originalText;
+  }
+}
+
 async function deleteTemplate(actionType, label) {
   const confirmed = window.confirm(`Delete the uploaded ${label} form? This cannot be undone.`);
   if (!confirmed) return;
@@ -2207,6 +2245,12 @@ document.addEventListener("change", event => {
   if (documentInput) {
     uploadActionDocument(Number(documentInput.dataset.documentFile), documentInput.files[0]);
     documentInput.value = "";
+  }
+
+  const incidentDocumentInput = event.target.closest("[data-incident-document-file]");
+  if (incidentDocumentInput) {
+    uploadIncidentReflection(Number(incidentDocumentInput.dataset.incidentDocumentFile), incidentDocumentInput.files[0]);
+    incidentDocumentInput.value = "";
   }
 });
 

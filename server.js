@@ -1388,6 +1388,11 @@ function safeDocumentFileName(actionId, originalName) {
   return `action-${actionId}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
 }
 
+function safeIncidentDocumentFileName(incidentId, originalName) {
+  const ext = path.extname(originalName || "").toLowerCase().replace(/[^a-z0-9.]/g, "") || ".pdf";
+  return `incident-${incidentId}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
+}
+
 function createOrUpdateStudent(row) {
   const firstName = required(row.first_name, "First name");
   const lastName = required(row.last_name, "Last name");
@@ -1611,7 +1616,7 @@ async function handleApi(req, res, url) {
     const students = statements.listStudents
       .all(term.id, "", "%%")
       .map(toTeacherStudentView)
-      .filter(student => student.violation_count > 0 || student.warning_count > 0);
+      .filter(student => student.status.key !== "no_violations");
     return sendJson(res, 200, { currentTerm: term, students });
   }
 
@@ -2195,6 +2200,51 @@ async function handleApi(req, res, url) {
       session.email || session.name || null
     );
     statements.addAudit.run("document", Number(result.lastInsertRowid), `${originalName} was uploaded.`);
+    const document = statements.getDocument.get(Number(result.lastInsertRowid));
+    return sendJson(res, 201, documentView(document));
+  }
+
+  const incidentDocumentMatch = url.pathname.match(/^\/api\/incidents\/(\d+)\/documents$/);
+  if (req.method === "POST" && incidentDocumentMatch) {
+    const session = requireAuth(req);
+    const incidentId = Number(incidentDocumentMatch[1]);
+    const incident = statements.getIncident.get(incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Warning or violation not found" });
+    if (incident.canceled_at) {
+      return sendJson(res, 400, { error: "A reflection cannot be attached to a removed warning or violation." });
+    }
+    const isWarning = incident.entry_type === "warning";
+    const isCurrentMonitorIncident = incident.entry_type === "violation"
+      && incident.severity === "minor"
+      && Number(incident.term_id) === Number(currentTerm().id)
+      && statusForStudent(incident.student_id).key === "monitor";
+    if (!isWarning && !isCurrentMonitorIncident) {
+      return sendJson(res, 400, { error: "Digital Impact Reflections can only be attached to warnings or the current Monitor situation." });
+    }
+
+    const body = await readBody(req);
+    const originalName = required(body.original_name, "File name");
+    const mimeType = nullable(body.mime_type) || "application/octet-stream";
+    const base64 = required(body.content_base64, "File content");
+    const storedName = safeIncidentDocumentFileName(incidentId, originalName);
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.length > 10_000_000) {
+      return sendJson(res, 400, { error: "Document must be 10 MB or smaller." });
+    }
+    fs.writeFileSync(path.join(DOCUMENT_DIR, storedName), bytes);
+    const result = statements.insertDocument.run(
+      incident.student_id,
+      null,
+      incident.id,
+      incident.term_id,
+      "digital_reflection",
+      "Digital Impact Reflection",
+      originalName,
+      storedName,
+      mimeType,
+      session.email || session.name || null
+    );
+    statements.addAudit.run("document", Number(result.lastInsertRowid), `${originalName} was uploaded as a Digital Impact Reflection.`);
     const document = statements.getDocument.get(Number(result.lastInsertRowid));
     return sendJson(res, 201, documentView(document));
   }
