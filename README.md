@@ -198,6 +198,7 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - Current Success Contract students without a usable date step automatically receive a `Set daily teacher check-in date` follow-up so Tech Staff can populate the date without changing prior completion history.
 - Teacher check-ins remain active through the selected date. Afterward, the student moves into the teacher dashboard's collapsed ended-check-ins section while remaining visible to Tech Staff and Tech Admin.
 - Fourth total violation: queue a five school-day Chromebook restriction and a re-entry check.
+- Teachers see the scheduled Chromebook return date through that date. Afterward, the student moves into a collapsed satisfied-restrictions subsection inside the 5 school-day restriction panel while remaining visible to Tech Staff and Tech Admin.
 - Fifth or later violation: queue admin review and parent contact.
 
 ## Chromebook Repair And Fine Workflow

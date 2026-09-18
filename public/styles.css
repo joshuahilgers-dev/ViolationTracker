@@ -639,6 +639,28 @@ button {
   color: #92400e;
 }
 
+.teacher-restriction-label {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 10px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #ffedd5;
+  color: #9a3412;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.teacher-restriction-label.satisfied {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.teacher-restriction-label.needs-date {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .teacher-student-card > .panel-note {
   display: block;
   margin-top: 8px;
@@ -702,7 +724,7 @@ details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::after {
   margin-bottom: 14px;
 }
 
-.teacher-ended-contracts {
+.teacher-completed-step-group {
   margin-top: 14px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -710,11 +732,11 @@ details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::after {
   background: #f8fafc;
 }
 
-.teacher-ended-contracts[open] > summary {
+.teacher-completed-step-group[open] > summary {
   margin-bottom: 8px;
 }
 
-.teacher-ended-contracts > .panel-note {
+.teacher-completed-step-group > .panel-note {
   margin-top: 0;
 }
 
@@ -774,6 +796,24 @@ details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::after {
 }
 
 .teacher-check-in-notice.needs_date {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.teacher-check-in-notice.restriction {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.teacher-check-in-notice.restriction.satisfied {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.teacher-check-in-notice.restriction.needs_date {
   border-color: #fcd34d;
   background: #fffbeb;
   color: #78350f;
@@ -1132,6 +1172,16 @@ details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::after {
   font-size: 0.82rem;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.return-date-badge.satisfied {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.return-date-badge.needs_date {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .check-in-date-badge {

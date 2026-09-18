@@ -658,6 +658,22 @@ function prepareStatements() {
     ORDER BY due_on IS NULL, due_on, id
     LIMIT 1
   `),
+  currentRestrictionDateActionForStudent: prepare(`
+    SELECT a.*
+    FROM actions a
+    LEFT JOIN incidents i ON i.id = a.incident_id
+    LEFT JOIN step_adjustments sa ON sa.id = a.step_adjustment_id
+    WHERE a.student_id = ?
+      AND a.action_type IN ('device_restriction', 'reentry_check', 'return_chromebook')
+      AND a.due_on IS NOT NULL
+      AND (a.incident_id IS NULL OR i.canceled_at IS NULL)
+      AND (
+        i.term_id = ?
+        OR (sa.term_id = ? AND sa.ended_at IS NULL)
+      )
+    ORDER BY a.id DESC
+    LIMIT 1
+  `),
   currentSuccessContractActionForStudent: prepare(`
     SELECT a.*
     FROM actions a
@@ -958,8 +974,7 @@ function toStudentView(row) {
     status: statusForStudent(row.id)
   };
   if (student.status.key === "device_restriction") {
-    const returnAction = statements.nextReturnActionForStudent.get(row.id);
-    student.chromebook_return_on = returnAction?.due_on || null;
+    Object.assign(student, deviceRestrictionSupervisionForStudent(row.id));
   }
   if (student.status.key === "success_contract") {
     Object.assign(student, successContractSupervisionForStudent(row.id));
@@ -980,6 +995,7 @@ function toTeacherStudentView(row) {
     major_count: student.major_count,
     warning_count: student.warning_count,
     chromebook_return_on: student.chromebook_return_on || null,
+    device_restriction_supervision_state: student.device_restriction_supervision_state || null,
     success_contract_check_in_through: student.success_contract_check_in_through || null,
     success_contract_supervision_state: student.success_contract_supervision_state || null,
     status: warningOnly ? {
@@ -996,6 +1012,18 @@ function localDateText(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function deviceRestrictionSupervisionForStudent(studentId, todayText = localDateText()) {
+  const term = currentTerm();
+  const action = statements.currentRestrictionDateActionForStudent.get(studentId, term.id, term.id);
+  const returnOn = action?.due_on || null;
+  return {
+    chromebook_return_on: returnOn,
+    device_restriction_supervision_state: !returnOn
+      ? "needs_date"
+      : returnOn >= todayText ? "active" : "satisfied"
+  };
 }
 
 function successContractSupervisionForStudent(studentId, todayText = localDateText()) {
@@ -1771,6 +1799,7 @@ async function handleApi(req, res, url) {
         reported_by: incident.reported_by,
         notes: incident.notes || null
       }));
+    const restrictionSupervision = deviceRestrictionSupervisionForStudent(student.id);
     const contractSupervision = successContractSupervisionForStudent(student.id);
     return sendJson(res, 200, {
       student: {
@@ -1779,6 +1808,8 @@ async function handleApi(req, res, url) {
         last_name: student.last_name,
         grade: student.grade,
         status: statusForStudent(student.id),
+        chromebook_return_on: restrictionSupervision.chromebook_return_on,
+        device_restriction_supervision_state: restrictionSupervision.device_restriction_supervision_state,
         success_contract_check_in_through: contractSupervision.success_contract_check_in_through,
         success_contract_supervision_state: contractSupervision.success_contract_supervision_state
       },
