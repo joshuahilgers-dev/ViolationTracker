@@ -644,20 +644,73 @@ button {
   margin-top: 8px;
 }
 
-.teacher-ended-contracts {
-  border-left: 5px solid #94a3b8;
-}
-
-.teacher-ended-contracts summary {
+.teacher-disclosure-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  list-style: none;
   cursor: pointer;
   font-weight: 800;
 }
 
-.teacher-ended-contracts[open] summary {
+.teacher-disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.teacher-disclosure-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.teacher-disclosure-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-dark);
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.teacher-disclosure-toggle::before {
+  content: "Show students";
+}
+
+.teacher-disclosure-toggle::after {
+  content: "\25BE";
+  font-size: 1rem;
+  transition: transform 0.15s ease;
+}
+
+details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::before {
+  content: "Hide students";
+}
+
+details[open] > .teacher-disclosure-summary .teacher-disclosure-toggle::after {
+  transform: rotate(180deg);
+}
+
+.teacher-collapsible-section > .panel-heading {
+  margin-bottom: 0;
+}
+
+.teacher-collapsible-section[open] > .panel-heading {
+  margin-bottom: 14px;
+}
+
+.teacher-ended-contracts {
+  margin-top: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+
+.teacher-ended-contracts[open] > summary {
   margin-bottom: 8px;
 }
 

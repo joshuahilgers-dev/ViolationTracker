@@ -52,6 +52,23 @@ Start-ScheduledTask -TaskName "Technology Violation Tracker"
 
 The task runs as `SYSTEM`, starts two minutes after Windows startup, and is configured to restart if the Node process exits unexpectedly. If the server has machine-level environment variables for Google sign-in or email, reboot or open a new elevated PowerShell window after setting them.
 
+## Updating the Production Server
+
+After `scripts\update-server.ps1` is present on the server, future updates require one command from an elevated PowerShell window:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "W:\ViolationTracker\scripts\update-server.ps1"
+```
+
+The updater verifies the `ViolationTracker` scheduled task and port 4173 process, refuses to overwrite tracked local changes, backs up `data` and `.env` under `W:\ViolationTracker-Backups`, fast-forwards from `origin/main`, installs exact dependencies when package files changed, runs the build check, restarts only the tracker, and verifies the health endpoint. It never stops every Node process on the server.
+
+If the server does not have the updater yet, pull once from `W:\ViolationTracker` and then run the command above:
+
+```powershell
+git pull --ff-only origin main
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "W:\ViolationTracker\scripts\update-server.ps1"
+```
+
 ## Google Staff Sign-In
 
 The app uses Google Identity Services in the browser and verifies the Google ID token on the server. The server then creates its own HTTP-only session cookie.

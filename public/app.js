@@ -315,12 +315,35 @@ function teacherStudentCard(student) {
   `;
 }
 
-function teacherStatusSection(key, students) {
+function teacherDisclosureMeta(key, count) {
+  return `
+    <span class="teacher-disclosure-meta">
+      <span class="badge ${escapeHtml(key)}">${count} student${count === 1 ? "" : "s"}</span>
+      <span class="teacher-disclosure-toggle" aria-hidden="true"></span>
+    </span>`;
+}
+
+function teacherStatusSection(key, students, options = {}) {
   if (!students.length) return "";
   const status = key === "warnings" ? {
     label: "Warnings documented",
     description: "These students have a current-term warning. Warnings do not count toward intervention steps."
   } : students[0].status;
+  if (options.collapsible) {
+    return `
+      <details class="panel teacher-status-section teacher-collapsible-section ${escapeHtml(key)}" ${options.open ? "open" : ""}>
+        <summary class="panel-heading teacher-disclosure-summary">
+          <div>
+            <h3>${escapeHtml(status.label)}</h3>
+            <p class="panel-note">${escapeHtml(status.description)}</p>
+          </div>
+          ${teacherDisclosureMeta(key, students.length)}
+        </summary>
+        <div class="teacher-student-grid">
+          ${students.map(teacherStudentCard).join("")}
+        </div>
+      </details>`;
+  }
   return `
     <section class="panel teacher-status-section ${escapeHtml(key)}">
       <div class="panel-heading">
@@ -333,6 +356,43 @@ function teacherStatusSection(key, students) {
       <div class="teacher-student-grid">
         ${students.map(teacherStudentCard).join("")}
       </div>
+    </section>`;
+}
+
+function teacherSuccessContractSection(activeStudents, endedStudents, openEnded = false) {
+  const allStudents = [...activeStudents, ...endedStudents];
+  if (!allStudents.length) return "";
+  const status = allStudents[0].status;
+  const countLabel = endedStudents.length
+    ? `${activeStudents.length} active · ${endedStudents.length} ended`
+    : `${activeStudents.length} student${activeStudents.length === 1 ? "" : "s"}`;
+  const endedSection = endedStudents.length ? `
+    <details class="teacher-ended-contracts" ${openEnded ? "open" : ""}>
+      <summary class="teacher-disclosure-summary">
+        <span>Daily check-ins ended</span>
+        ${teacherDisclosureMeta("success_contract", endedStudents.length)}
+      </summary>
+      <p class="panel-note">These students remain on a Technology Success Contract, but their daily teacher check-in period has ended.</p>
+      <div class="teacher-student-grid">
+        ${endedStudents.map(teacherStudentCard).join("")}
+      </div>
+    </details>
+  ` : "";
+  return `
+    <section class="panel teacher-status-section success_contract">
+      <div class="panel-heading">
+        <div>
+          <h3>${escapeHtml(status.label)}</h3>
+          <p class="panel-note">${escapeHtml(status.description)}</p>
+        </div>
+        <span class="badge success_contract">${countLabel}</span>
+      </div>
+      ${activeStudents.length ? `
+        <div class="teacher-student-grid">
+          ${activeStudents.map(teacherStudentCard).join("")}
+        </div>
+      ` : `<p class="panel-note">No students currently require daily teacher check-ins.</p>`}
+      ${endedSection}
     </section>`;
 }
 
@@ -358,30 +418,24 @@ function renderTeacherDashboard() {
     : "";
   const endedContracts = visible.filter(student => student.status.key === "success_contract"
     && student.success_contract_supervision_state === "ended");
-  const primaryStudents = visible.filter(student => !(student.status.key === "success_contract"
-    && student.success_contract_supervision_state === "ended"));
-  if (!primaryStudents.length && !endedContracts.length) {
+  const activeContracts = visible.filter(student => student.status.key === "success_contract"
+    && student.success_contract_supervision_state !== "ended");
+  if (!visible.length) {
     els.teacherStatusGroups.innerHTML = `<div class="empty">${query || selectedGrades.size < 3 ? "No students match the selected search and grade filters." : "No students currently have warnings or active technology intervention steps."}</div>`;
     return;
   }
-  const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
-  const primarySections = order.map(key => teacherStatusSection(
-    key,
-    primaryStudents.filter(student => student.status.key === key)
-  )).join("");
-  const endedSection = endedContracts.length ? `
-    <details class="panel teacher-ended-contracts" ${query ? "open" : ""}>
-      <summary>
-        <span>Success contracts — daily check-ins ended</span>
-        <span class="badge success_contract">${endedContracts.length} student${endedContracts.length === 1 ? "" : "s"}</span>
-      </summary>
-      <p class="panel-note">These students remain on a Technology Success Contract, but their daily teacher check-in period has ended.</p>
-      <div class="teacher-student-grid">
-        ${endedContracts.map(teacherStudentCard).join("")}
-      </div>
-    </details>
-  ` : "";
-  els.teacherStatusGroups.innerHTML = `${primarySections}${endedSection}`;
+  els.teacherStatusGroups.innerHTML = [
+    teacherStatusSection("admin_review", visible.filter(student => student.status.key === "admin_review")),
+    teacherStatusSection("device_restriction", visible.filter(student => student.status.key === "device_restriction")),
+    teacherSuccessContractSection(activeContracts, endedContracts, Boolean(query)),
+    teacherStatusSection("reflection", visible.filter(student => student.status.key === "reflection")),
+    teacherStatusSection("monitor", visible.filter(student => student.status.key === "monitor")),
+    teacherStatusSection(
+      "warnings",
+      visible.filter(student => student.status.key === "warnings"),
+      { collapsible: true, open: Boolean(query) }
+    )
+  ].join("");
 }
 
 async function showTeacherStudentDetail(studentId) {
