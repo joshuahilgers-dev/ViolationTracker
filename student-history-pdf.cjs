@@ -98,7 +98,9 @@ function createStudentHistoryPdf(student, term, now = new Date()) {
     if (student.actions.length) {
       section("Follow-Up History: All Terms");
       for (const action of student.actions) record(`${action.title} | ${action.status}`, [
-        action.created_at && `Created: ${action.created_at}`, action.due_on && `Due: ${action.due_on}`,
+        action.created_at && `Created: ${action.created_at}`,
+        action.due_on && `Due: ${action.due_on}`,
+        action.check_in_through && `Teacher check-ins through: ${action.check_in_through}`,
         action.completed_on && `Completed: ${action.completed_on}`, action.owner && `Owner: ${action.owner}`
       ], action.notes && `Notes: ${action.notes}`);
     }

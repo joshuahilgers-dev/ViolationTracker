@@ -287,6 +287,55 @@ function renderAll() {
   renderNotificationSettings();
 }
 
+function teacherCheckInLabel(student) {
+  if (student.status.key !== "success_contract") return "";
+  const date = student.success_contract_check_in_through;
+  if (student.success_contract_supervision_state === "ended" && date) {
+    return `<span class="teacher-check-in-label ended">Check-ins ended ${escapeHtml(formatDate(date))}</span>`;
+  }
+  if (date) {
+    return `<span class="teacher-check-in-label active">Daily check-ins through ${escapeHtml(formatDate(date))}</span>`;
+  }
+  return `<span class="teacher-check-in-label needs-date">Check-in end date needed</span>`;
+}
+
+function teacherStudentCard(student) {
+  return `
+    <button type="button" class="teacher-student-card" data-teacher-student-id="${student.id}" aria-label="View details for ${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}">
+      <h4>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</h4>
+      <div class="meta">
+        ${student.grade ? `<span>Grade ${escapeHtml(student.grade)}</span>` : ""}
+        <span>${student.violation_count} violation${student.violation_count === 1 ? "" : "s"}</span>
+        ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
+        ${student.chromebook_return_on ? `<span>Return date ${escapeHtml(formatDate(student.chromebook_return_on))}</span>` : ""}
+      </div>
+      ${teacherCheckInLabel(student)}
+      <span class="panel-note">Select for details</span>
+    </button>
+  `;
+}
+
+function teacherStatusSection(key, students) {
+  if (!students.length) return "";
+  const status = key === "warnings" ? {
+    label: "Warnings documented",
+    description: "These students have a current-term warning. Warnings do not count toward intervention steps."
+  } : students[0].status;
+  return `
+    <section class="panel teacher-status-section ${escapeHtml(key)}">
+      <div class="panel-heading">
+        <div>
+          <h3>${escapeHtml(status.label)}</h3>
+          <p class="panel-note">${escapeHtml(status.description)}</p>
+        </div>
+        <span class="badge ${escapeHtml(key)}">${students.length} student${students.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="teacher-student-grid">
+        ${students.map(teacherStudentCard).join("")}
+      </div>
+    </section>`;
+}
+
 function renderTeacherDashboard() {
   const query = (els.teacherStudentSearch.value || "").trim().toLowerCase();
   const selectedGrades = new Set([...els.teacherGradeFilters]
@@ -307,43 +356,32 @@ function renderTeacherDashboard() {
   els.teacherTermLabel.textContent = state.currentTerm
     ? `Current term: ${state.currentTerm.name}`
     : "";
-  if (!visible.length) {
+  const endedContracts = visible.filter(student => student.status.key === "success_contract"
+    && student.success_contract_supervision_state === "ended");
+  const primaryStudents = visible.filter(student => !(student.status.key === "success_contract"
+    && student.success_contract_supervision_state === "ended"));
+  if (!primaryStudents.length && !endedContracts.length) {
     els.teacherStatusGroups.innerHTML = `<div class="empty">${query || selectedGrades.size < 3 ? "No students match the selected search and grade filters." : "No students currently have warnings or active technology intervention steps."}</div>`;
     return;
   }
   const order = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
-  els.teacherStatusGroups.innerHTML = order.map(key => {
-    const students = visible.filter(student => student.status.key === key);
-    if (!students.length) return "";
-    const status = key === "warnings" ? {
-      label: "Warnings documented",
-      description: "These students have a current-term warning. Warnings do not count toward intervention steps."
-    } : students[0].status;
-    return `
-      <section class="panel teacher-status-section ${escapeHtml(key)}">
-        <div class="panel-heading">
-          <div>
-            <h3>${escapeHtml(status.label)}</h3>
-            <p class="panel-note">${escapeHtml(status.description)}</p>
-          </div>
-          <span class="badge ${escapeHtml(key)}">${students.length} student${students.length === 1 ? "" : "s"}</span>
-        </div>
-        <div class="teacher-student-grid">
-          ${students.map(student => `
-            <button type="button" class="teacher-student-card" data-teacher-student-id="${student.id}" aria-label="View details for ${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}">
-              <h4>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</h4>
-              <div class="meta">
-                ${student.grade ? `<span>Grade ${escapeHtml(student.grade)}</span>` : ""}
-                <span>${student.violation_count} violation${student.violation_count === 1 ? "" : "s"}</span>
-                ${student.warning_count ? `<span>${student.warning_count} warning${student.warning_count === 1 ? "" : "s"}</span>` : ""}
-                ${student.chromebook_return_on ? `<span>Return date ${escapeHtml(student.chromebook_return_on)}</span>` : ""}
-              </div>
-              <span class="panel-note">Select for details</span>
-            </button>
-          `).join("")}
-        </div>
-      </section>`;
-  }).join("");
+  const primarySections = order.map(key => teacherStatusSection(
+    key,
+    primaryStudents.filter(student => student.status.key === key)
+  )).join("");
+  const endedSection = endedContracts.length ? `
+    <details class="panel teacher-ended-contracts" ${query ? "open" : ""}>
+      <summary>
+        <span>Success contracts — daily check-ins ended</span>
+        <span class="badge success_contract">${endedContracts.length} student${endedContracts.length === 1 ? "" : "s"}</span>
+      </summary>
+      <p class="panel-note">These students remain on a Technology Success Contract, but their daily teacher check-in period has ended.</p>
+      <div class="teacher-student-grid">
+        ${endedContracts.map(teacherStudentCard).join("")}
+      </div>
+    </details>
+  ` : "";
+  els.teacherStatusGroups.innerHTML = `${primarySections}${endedSection}`;
 }
 
 async function showTeacherStudentDetail(studentId) {
@@ -360,7 +398,17 @@ async function showTeacherStudentDetail(studentId) {
       data.currentTerm?.name || "Current term",
       student.status?.label || ""
     ].filter(Boolean).join(" · ");
-    els.teacherDialogContent.innerHTML = data.incidents.length
+    const checkInNotice = student.status?.key === "success_contract" ? `
+      <div class="teacher-check-in-notice ${escapeHtml(student.success_contract_supervision_state || "needs_date")}">
+        ${teacherCheckInLabel(student)}
+        <span>${student.success_contract_supervision_state === "ended"
+          ? "The success contract remains active, but daily teacher supervision is no longer required."
+          : student.success_contract_check_in_through
+            ? "Daily teacher check-ins are required through this date."
+            : "Tech staff still need to enter the final day of daily teacher check-ins."}</span>
+      </div>
+    ` : "";
+    const incidentHistory = data.incidents.length
       ? data.incidents.map(incident => {
           const isWarning = incident.entry_type === "warning";
           const entryLabel = isWarning ? "Warning" : `${incident.severity === "major" ? "Major" : "Minor"} violation`;
@@ -379,6 +427,7 @@ async function showTeacherStudentDetail(studentId) {
             </article>`;
         }).join("")
       : `<div class="empty">No active warnings or violations are recorded for this term.</div>`;
+    els.teacherDialogContent.innerHTML = `${checkInNotice}${incidentHistory}`;
   } catch (error) {
     els.teacherDialogSubtitle.textContent = "Unable to load details";
     els.teacherDialogContent.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -826,7 +875,8 @@ function followupStudentCard(group) {
 
 function actionCard(action) {
   const template = templateForAction(action.action_type);
-  const allowsDocumentUpload = !String(action.action_type || "").startsWith("parent_contact");
+  const allowsDocumentUpload = !String(action.action_type || "").startsWith("parent_contact")
+    && action.action_type !== "success_contract_check_in";
   return `
     <article class="action-row" data-action-id="${action.id}">
       <div>
@@ -871,6 +921,16 @@ function documentList(documents) {
 }
 
 function actionFields(action) {
+  if (["success_contract", "success_contract_check_in"].includes(action.action_type)) {
+    return `
+      <div class="action-fields">
+        <label>
+          Daily teacher check-ins through
+          <input type="date" data-action-check-in-through="${action.id}" required>
+        </label>
+      </div>
+    `;
+  }
   if (action.action_type === "device_restriction") {
     return `
       <div class="action-fields">
@@ -1070,6 +1130,11 @@ function statusStudentRow(student, key) {
   const returnBadge = key === "device_restriction" && student.chromebook_return_on
     ? `<span class="return-date-badge">Return: ${escapeHtml(formatDate(student.chromebook_return_on))}</span>`
     : "";
+  const contractBadge = key === "success_contract"
+    ? `<span class="check-in-date-badge ${escapeHtml(student.success_contract_supervision_state || "needs_date")}">${student.success_contract_check_in_through
+      ? `${student.success_contract_supervision_state === "ended" ? "Check-ins ended" : "Check-ins through"}: ${escapeHtml(formatDate(student.success_contract_check_in_through))}`
+      : "Check-in date needed"}</span>`
+    : "";
   return `
     <article class="list-row">
       <div>
@@ -1084,6 +1149,7 @@ function statusStudentRow(student, key) {
       </div>
       <div class="row-actions">
         ${returnBadge}
+        ${contractBadge}
         <button class="quiet-button" data-student-id="${student.id}">Review</button>
       </div>
     </article>
@@ -1164,6 +1230,36 @@ function stepAdjustmentOptions(student) {
     .filter(key => !student.activeAdjustment || key !== student.automaticStatus?.key)
     .map(key => `<option value="${key}">${escapeHtml(statusLabels[key])}</option>`)
     .join("");
+}
+
+function successContractCheckInEditor(student) {
+  if (student.status?.key !== "success_contract"
+    || !student.success_contract_action_id
+    || student.success_contract_action_status !== "complete") {
+    return "";
+  }
+  const ended = student.success_contract_supervision_state === "ended";
+  const needsDate = student.success_contract_supervision_state === "needs_date";
+  return `
+    <section class="contract-check-in-editor ${ended ? "ended" : needsDate ? "needs-date" : "active"}">
+      <div>
+        <strong>${ended ? "Daily teacher check-ins ended" : needsDate ? "Daily teacher check-in date needed" : "Daily teacher check-ins active"}</strong>
+        <p>${needsDate
+          ? "Enter the final day of teacher check-ins. Until a date is saved, this student remains visible in the teacher dashboard's main contract section."
+          : ended
+          ? "The student remains on the Technology Success Contract step and is hidden from the teacher dashboard's main contract section."
+          : "The student remains on the teacher dashboard's main contract section through this date."}</p>
+      </div>
+      <form data-success-contract-date-form="${student.success_contract_action_id}">
+        <label>
+          Daily teacher check-ins through
+          <input type="date" name="check_in_through" value="${escapeHtml(student.success_contract_check_in_through || "")}" required>
+        </label>
+        <button type="submit" class="quiet-button">Save date</button>
+        <span role="status"></span>
+      </form>
+    </section>
+  `;
 }
 
 function stepAdjustmentForm(student) {
@@ -1307,6 +1403,7 @@ async function showStudentDetail(id) {
       <div class="detail-stat ${isArchived ? "" : "full-width"}"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
       ${isArchived ? `<div class="detail-stat full-width"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>` : ""}
     </div>
+    ${isArchived ? "" : successContractCheckInEditor(student)}
     ${isArchived ? "" : `
       <h4 class="section-title">Open Follow-Ups</h4>
       <div class="timeline">
@@ -1748,9 +1845,11 @@ async function completeAction(id) {
   const actionRow = document.querySelector(`[data-action-id="${id}"]`);
   const assetTagField = actionRow?.querySelector(`[data-action-asset-tag="${id}"]`);
   const returnDateField = actionRow?.querySelector(`[data-action-return-date="${id}"]`);
+  const checkInThroughField = actionRow?.querySelector(`[data-action-check-in-through="${id}"]`);
   const payload = { status: "complete" };
   if (assetTagField) payload.asset_tag = assetTagField.value.trim();
   if (returnDateField) payload.return_date = returnDateField.value;
+  if (checkInThroughField) payload.check_in_through = checkInThroughField.value;
   if (assetTagField && !payload.asset_tag) {
     assetTagField.focus();
     window.alert("Enter or scan the asset tag before completing this follow-up.");
@@ -1759,6 +1858,11 @@ async function completeAction(id) {
   if (returnDateField && !payload.return_date) {
     returnDateField.focus();
     window.alert("Choose the Chromebook return date before completing this follow-up.");
+    return;
+  }
+  if (checkInThroughField && !payload.check_in_through) {
+    checkInThroughField.focus();
+    window.alert("Choose the final day of daily teacher check-ins before completing this follow-up.");
     return;
   }
 
@@ -1933,6 +2037,31 @@ async function endStepAdjustment(adjustmentId, studentId, label) {
     await refreshAfterStepChange(studentId);
   } catch (error) {
     window.alert(error.message);
+  }
+}
+
+async function saveSuccessContractCheckInDate(form) {
+  const actionId = Number(form.dataset.successContractDateForm);
+  const field = form.elements.check_in_through;
+  const button = form.querySelector("button[type='submit']");
+  const message = form.querySelector("[role='status']");
+  if (!field.value) {
+    field.focus();
+    message.textContent = "Choose the final check-in date.";
+    return;
+  }
+  button.disabled = true;
+  message.textContent = "Saving...";
+  try {
+    await api(`/api/actions/${actionId}/check-in-through`, {
+      method: "PATCH",
+      body: JSON.stringify({ check_in_through: field.value })
+    });
+    await loadBootstrap();
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    message.textContent = error.message;
+    button.disabled = false;
   }
 }
 
@@ -2345,6 +2474,12 @@ document.addEventListener("submit", event => {
   if (form) {
     event.preventDefault();
     submitStepAdjustment(form);
+  }
+
+  const contractDateForm = event.target.closest("[data-success-contract-date-form]");
+  if (contractDateForm) {
+    event.preventDefault();
+    saveSuccessContractCheckInDate(contractDateForm);
   }
 });
 

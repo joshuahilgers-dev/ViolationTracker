@@ -305,6 +305,7 @@ function migrate() {
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'complete')),
       due_on TEXT,
+      check_in_through TEXT,
       completed_on TEXT,
       owner TEXT,
       notes TEXT,
@@ -394,6 +395,7 @@ function migrate() {
   ensureColumn("incidents", "conversion_reason", "TEXT");
   ensureColumn("infraction_types", "seed_key", "TEXT");
   ensureColumn("actions", "step_adjustment_id", "INTEGER");
+  ensureColumn("actions", "check_in_through", "TEXT");
   ensureColumn("step_adjustments", "ended_at", "TEXT");
   ensureColumn("step_adjustments", "ended_by", "TEXT");
   ensureColumn("step_adjustments", "ended_reason", "TEXT");
@@ -568,12 +570,13 @@ function prepareStatements() {
         WHEN 'digital_reflection' THEN 1
         WHEN 'parent_contact_reflection' THEN 2
         WHEN 'success_contract' THEN 3
-        WHEN 'parent_contact_contract' THEN 4
-        WHEN 'device_restriction' THEN 5
-        WHEN 'reentry_check' THEN 6
-        WHEN 'return_chromebook' THEN 7
-        WHEN 'admin_review' THEN 8
-        WHEN 'parent_contact_admin' THEN 9
+        WHEN 'success_contract_check_in' THEN 4
+        WHEN 'parent_contact_contract' THEN 5
+        WHEN 'device_restriction' THEN 6
+        WHEN 'reentry_check' THEN 7
+        WHEN 'return_chromebook' THEN 8
+        WHEN 'admin_review' THEN 9
+        WHEN 'parent_contact_admin' THEN 10
         ELSE 99
       END,
       id
@@ -592,12 +595,13 @@ function prepareStatements() {
         WHEN 'digital_reflection' THEN 1
         WHEN 'parent_contact_reflection' THEN 2
         WHEN 'success_contract' THEN 3
-        WHEN 'parent_contact_contract' THEN 4
-        WHEN 'device_restriction' THEN 5
-        WHEN 'reentry_check' THEN 6
-        WHEN 'return_chromebook' THEN 7
-        WHEN 'admin_review' THEN 8
-        WHEN 'parent_contact_admin' THEN 9
+        WHEN 'success_contract_check_in' THEN 4
+        WHEN 'parent_contact_contract' THEN 5
+        WHEN 'device_restriction' THEN 6
+        WHEN 'reentry_check' THEN 7
+        WHEN 'return_chromebook' THEN 8
+        WHEN 'admin_review' THEN 9
+        WHEN 'parent_contact_admin' THEN 10
         ELSE 99
       END,
       a.id
@@ -654,6 +658,21 @@ function prepareStatements() {
     ORDER BY due_on IS NULL, due_on, id
     LIMIT 1
   `),
+  currentSuccessContractActionForStudent: prepare(`
+    SELECT a.*
+    FROM actions a
+    LEFT JOIN incidents i ON i.id = a.incident_id
+    LEFT JOIN step_adjustments sa ON sa.id = a.step_adjustment_id
+    WHERE a.student_id = ?
+      AND a.action_type IN ('success_contract', 'success_contract_check_in')
+      AND (a.incident_id IS NULL OR i.canceled_at IS NULL)
+      AND (
+        i.term_id = ?
+        OR (sa.term_id = ? AND sa.ended_at IS NULL)
+      )
+    ORDER BY a.id DESC
+    LIMIT 1
+  `),
   completeAction: prepare(`
     UPDATE actions
     SET status = ?, completed_on = ?, notes = COALESCE(?, notes)
@@ -661,6 +680,9 @@ function prepareStatements() {
   `),
   updateActionDueDate: prepare(`
     UPDATE actions SET due_on = ? WHERE id = ?
+  `),
+  updateActionCheckInThrough: prepare(`
+    UPDATE actions SET check_in_through = ? WHERE id = ?
   `),
   updateActionDueDateByIncidentType: prepare(`
     UPDATE actions
@@ -861,6 +883,7 @@ const WORKFLOW_ACTION_LEVELS = {
   digital_reflection: 2,
   parent_contact_reflection: 2,
   success_contract: 3,
+  success_contract_check_in: 3,
   parent_contact_contract: 3,
   device_restriction: 4,
   reentry_check: 4,
@@ -938,6 +961,9 @@ function toStudentView(row) {
     const returnAction = statements.nextReturnActionForStudent.get(row.id);
     student.chromebook_return_on = returnAction?.due_on || null;
   }
+  if (student.status.key === "success_contract") {
+    Object.assign(student, successContractSupervisionForStudent(row.id));
+  }
   return student;
 }
 
@@ -954,12 +980,35 @@ function toTeacherStudentView(row) {
     major_count: student.major_count,
     warning_count: student.warning_count,
     chromebook_return_on: student.chromebook_return_on || null,
+    success_contract_check_in_through: student.success_contract_check_in_through || null,
+    success_contract_supervision_state: student.success_contract_supervision_state || null,
     status: warningOnly ? {
       key: "warnings",
       label: "Warnings documented",
       level: 0,
       description: "A warning is documented. No violation currently counts toward an intervention step."
     } : student.status
+  };
+}
+
+function localDateText(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function successContractSupervisionForStudent(studentId, todayText = localDateText()) {
+  const term = currentTerm();
+  const action = statements.currentSuccessContractActionForStudent.get(studentId, term.id, term.id);
+  const checkInThrough = action?.status === "complete" ? action.check_in_through || null : null;
+  return {
+    success_contract_action_id: action?.id || null,
+    success_contract_action_status: action?.status || null,
+    success_contract_check_in_through: checkInThrough,
+    success_contract_supervision_state: !checkInThrough
+      ? "needs_date"
+      : checkInThrough >= todayText ? "active" : "ended"
   };
 }
 
@@ -1018,7 +1067,39 @@ function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus
 }
 
 function queueAction(studentId, incidentId, actionType, title, dueOn, owner, notes, stepAdjustmentId = null) {
-  statements.insertAction.run(studentId, incidentId, stepAdjustmentId, actionType, title, dueOn, owner, notes);
+  return statements.insertAction.run(studentId, incidentId, stepAdjustmentId, actionType, title, dueOn, owner, notes);
+}
+
+function ensureCurrentSuccessContractCheckInActions() {
+  const term = currentTerm();
+  const students = statements.listStudents.all(term.id, "", "%%");
+  for (const student of students) {
+    if (statusForStudent(student.id).key !== "success_contract") continue;
+    const currentAction = statements.currentSuccessContractActionForStudent.get(student.id, term.id, term.id);
+    if (currentAction?.check_in_through || currentAction?.status === "open") continue;
+
+    const activeAdjustment = activeAdjustmentForStudent(student.id);
+    const adjustmentCreatesContract = activeAdjustment?.target_step === "success_contract";
+    const incidentId = adjustmentCreatesContract ? null : Number(student.last_incident_id || 0) || null;
+    const stepAdjustmentId = adjustmentCreatesContract ? activeAdjustment.id : null;
+    if (!incidentId && !stepAdjustmentId) continue;
+
+    const result = queueAction(
+      student.id,
+      incidentId,
+      "success_contract_check_in",
+      "Set daily teacher check-in date",
+      localDateText(),
+      "Tech Staff",
+      "Enter the final day the student is required to check in with teachers.",
+      stepAdjustmentId
+    );
+    statements.addAudit.run(
+      "action",
+      Number(result.lastInsertRowid || 0),
+      `Teacher check-in date follow-up added for current Success Contract student ${student.id}.`
+    );
+  }
 }
 
 function reconcileOpenActionsForLowerStep(studentId, currentStatus, reason, todayText) {
@@ -1690,13 +1771,16 @@ async function handleApi(req, res, url) {
         reported_by: incident.reported_by,
         notes: incident.notes || null
       }));
+    const contractSupervision = successContractSupervisionForStudent(student.id);
     return sendJson(res, 200, {
       student: {
         id: student.id,
         first_name: student.first_name,
         last_name: student.last_name,
         grade: student.grade,
-        status: statusForStudent(student.id)
+        status: statusForStudent(student.id),
+        success_contract_check_in_through: contractSupervision.success_contract_check_in_through,
+        success_contract_supervision_state: contractSupervision.success_contract_supervision_state
       },
       currentTerm: term,
       incidents
@@ -1968,6 +2052,7 @@ async function handleApi(req, res, url) {
       status: statusForStudent(id),
       automaticStatus: automaticStatusForStudent(id),
       activeAdjustment: activeAdjustmentForStudent(id),
+      ...successContractSupervisionForStudent(id),
       incidents,
       currentIncidents,
       previousIncidents,
@@ -2253,6 +2338,32 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { currentTerm: currentTerm() });
   }
 
+  const successContractCheckInMatch = url.pathname.match(/^\/api\/actions\/(\d+)\/check-in-through$/);
+  if (req.method === "PATCH" && successContractCheckInMatch) {
+    const actionId = Number(successContractCheckInMatch[1]);
+    const action = statements.getAction.get(actionId);
+    if (!action) return sendJson(res, 404, { error: "Follow-up not found" });
+    if (!["success_contract", "success_contract_check_in"].includes(action.action_type)) {
+      return sendJson(res, 400, { error: "This follow-up does not use a teacher check-in date." });
+    }
+    if (action.status !== "complete") {
+      return sendJson(res, 400, { error: "Complete the success contract follow-up to set its teacher check-in date." });
+    }
+    const body = await readBody(req);
+    const checkInThrough = optionalDate(body.check_in_through, "Teacher check-in through date");
+    if (!checkInThrough) {
+      return sendJson(res, 400, { error: "Teacher check-in through date is required." });
+    }
+    const previousDate = action.check_in_through || "not set";
+    statements.updateActionCheckInThrough.run(checkInThrough, actionId);
+    statements.addAudit.run(
+      "action",
+      actionId,
+      `Teacher check-in through date changed from ${previousDate} to ${checkInThrough} by ${currentUser.email}.`
+    );
+    return sendJson(res, 200, { ok: true, check_in_through: checkInThrough });
+  }
+
   const actionMatch = url.pathname.match(/^\/api\/actions\/(\d+)$/);
   if (req.method === "PATCH" && actionMatch) {
     const body = await readBody(req);
@@ -2262,6 +2373,19 @@ async function handleApi(req, res, url) {
     const status = body.status === "complete" ? "complete" : "open";
     const completedOn = status === "complete" ? new Date().toISOString().slice(0, 10) : null;
     let notes = nullable(body.notes);
+
+    if (status === "complete" && ["success_contract", "success_contract_check_in"].includes(action.action_type)) {
+      const checkInThrough = optionalDate(body.check_in_through, "Teacher check-in through date");
+      if (!checkInThrough) {
+        return sendJson(res, 400, { error: "Teacher check-in through date is required." });
+      }
+      statements.updateActionCheckInThrough.run(checkInThrough, actionId);
+      statements.addAudit.run(
+        "action",
+        actionId,
+        `Daily teacher check-ins set through ${checkInThrough} by ${currentUser.email}.`
+      );
+    }
 
     if (status === "complete" && action.action_type === "device_restriction") {
       const assetTag = required(body.asset_tag, "Asset tag");
@@ -2476,6 +2600,7 @@ async function main() {
   execSql("PRAGMA foreign_keys = ON;");
   migrate();
   statements = prepareStatements();
+  ensureCurrentSuccessContractCheckInActions();
   chromebookRepairs = createChromebookRepairs({
     getDb: () => db,
     persistDb,

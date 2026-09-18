@@ -177,6 +177,9 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 
 - Two minor violations: queue a Digital Impact Reflection and parent notification.
 - Three minor violations or one major violation: queue a Technology Success Contract and parent notification.
+- Completing the Technology Success Contract follow-up requires a daily teacher check-in-through date. The date controls teacher-dashboard supervision visibility but does not end the student's contract step.
+- Current Success Contract students without a usable date step automatically receive a `Set daily teacher check-in date` follow-up so Tech Staff can populate the date without changing prior completion history.
+- Teacher check-ins remain active through the selected date. Afterward, the student moves into the teacher dashboard's collapsed ended-check-ins section while remaining visible to Tech Staff and Tech Admin.
 - Fourth total violation: queue a five school-day Chromebook restriction and a re-entry check.
 - Fifth or later violation: queue admin review and parent contact.
 
@@ -198,7 +201,7 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - `students`: student profile, guardian contact, and device tag.
 - `infraction_types`: configurable minor and major violation categories.
 - `incidents`: teacher/staff violation reports.
-- `actions`: parent contact, reflection upload, contract, restriction, re-entry, and admin follow-ups.
+- `actions`: parent contact, reflection upload, contract, restriction, re-entry, and admin follow-ups, including the success-contract teacher check-in-through date.
 - `audit_log`: basic record of important changes.
 - `chromebook_repairs`: repair and fine records, Chromebook Care status, parent-notice status, and Skyward-entry status.
 - `repair_fee_schedule`: editable with/without Chromebook Care amounts.

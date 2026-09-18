@@ -617,6 +617,54 @@ button {
   margin: 0 0 5px;
 }
 
+.teacher-check-in-label {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 10px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #ede9fe;
+  color: #5b21b6;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.teacher-check-in-label.ended {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.teacher-check-in-label.needs-date {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.teacher-student-card > .panel-note {
+  display: block;
+  margin-top: 8px;
+}
+
+.teacher-ended-contracts {
+  border-left: 5px solid #94a3b8;
+}
+
+.teacher-ended-contracts summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.teacher-ended-contracts[open] summary {
+  margin-bottom: 8px;
+}
+
+.teacher-ended-contracts > .panel-note {
+  margin-top: 0;
+}
+
 .teacher-student-dialog {
   width: min(720px, calc(100vw - 32px));
   max-height: min(82vh, 760px);
@@ -654,6 +702,28 @@ button {
   gap: 12px;
   padding: 20px;
   overflow-y: auto;
+}
+
+.teacher-check-in-notice {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #c4b5fd;
+  border-radius: 9px;
+  padding: 13px;
+  background: #f5f3ff;
+  color: #4c1d95;
+}
+
+.teacher-check-in-notice.ended {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.teacher-check-in-notice.needs_date {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #78350f;
 }
 
 .teacher-history-entry {
@@ -1009,6 +1079,29 @@ button {
   font-size: 0.82rem;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.check-in-date-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #ede9fe;
+  color: #5b21b6;
+  font-size: 0.82rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.check-in-date-badge.ended {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.check-in-date-badge.needs_date {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .form-grid {
@@ -1460,6 +1553,49 @@ textarea {
 .action-fields {
   max-width: 320px;
   margin-top: 12px;
+}
+
+.contract-check-in-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  align-items: end;
+  gap: 18px;
+  margin-top: 16px;
+  border: 1px solid #c4b5fd;
+  border-left: 5px solid #7c3aed;
+  border-radius: 9px;
+  padding: 14px;
+  background: #f5f3ff;
+}
+
+.contract-check-in-editor.ended {
+  border-color: #cbd5e1;
+  border-left-color: #64748b;
+  background: #f8fafc;
+}
+
+.contract-check-in-editor.needs-date {
+  border-color: #fcd34d;
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+
+.contract-check-in-editor p {
+  margin: 5px 0 0;
+  color: var(--muted);
+}
+
+.contract-check-in-editor form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.contract-check-in-editor form [role="status"] {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .document-list {
@@ -2043,7 +2179,8 @@ textarea {
   .form-grid,
   .detail-grid,
   .preview-summary,
-  .preview-grid {
+  .preview-grid,
+  .contract-check-in-editor {
     grid-template-columns: 1fr;
   }
 
@@ -2113,5 +2250,13 @@ textarea {
 
   .compact-heading input {
     width: 100%;
+  }
+
+  .contract-check-in-editor form {
+    grid-template-columns: 1fr;
+  }
+
+  .contract-check-in-editor form [role="status"] {
+    grid-column: auto;
   }
 }
