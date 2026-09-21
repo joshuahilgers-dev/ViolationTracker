@@ -2077,7 +2077,8 @@ async function handleApi(req, res, url) {
   }
 
   const historyMatch = url.pathname.match(/^\/api\/students\/(\d+)\/history\.pdf$/);
-  const studentMatch = url.pathname.match(/^\/api\/students\/(\d+)$/) || historyMatch;
+  const parentHistoryMatch = url.pathname.match(/^\/api\/students\/(\d+)\/parent-history\.pdf$/);
+  const studentMatch = url.pathname.match(/^\/api\/students\/(\d+)$/) || historyMatch || parentHistoryMatch;
   if (req.method === "GET" && studentMatch) {
     const id = Number(studentMatch[1]);
     const student = statements.getStudent.get(id);
@@ -2105,11 +2106,14 @@ async function handleApi(req, res, url) {
       actions: statements.actionsForStudent.all(id),
       documents: statements.listDocumentsForStudent.all(id).map(documentView)
     };
-    if (historyMatch) {
-      const pdf = await createStudentHistoryPdf(history, term);
+    if (historyMatch || parentHistoryMatch) {
+      const generatedAt = new Date();
+      const audience = parentHistoryMatch ? "parent" : "full";
+      const pdf = await createStudentHistoryPdf(history, term, generatedAt, { audience });
       res.writeHead(200, {
         "Content-Type": "application/pdf",
-        "Content-Disposition": 'attachment; filename="' + historyFilename(student) + '"',
+        "Content-Disposition": (parentHistoryMatch ? "inline" : "attachment")
+          + '; filename="' + historyFilename(student, generatedAt, audience) + '"',
         "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
         "Content-Length": pdf.length
@@ -2178,7 +2182,7 @@ async function handleApi(req, res, url) {
     }
   }
 
-  if (req.method === "DELETE" && studentMatch && !historyMatch) {
+  if (req.method === "DELETE" && studentMatch && !historyMatch && !parentHistoryMatch) {
     const id = Number(studentMatch[1]);
     const student = statements.getStudent.get(id);
     if (!student) return sendJson(res, 404, { error: "Student not found" });

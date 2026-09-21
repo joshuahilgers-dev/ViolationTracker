@@ -1607,7 +1607,8 @@ async function showStudentDetail(id) {
       <div class="detail-actions">
         <div class="detail-primary-actions">
           <button class="quiet-button" data-return-from-student>${escapeHtml(studentReturnLabel(state.studentDetailReturnView))}</button>
-          <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
+          <a class="primary-button" href="/api/students/${student.id}/parent-history.pdf" target="_blank" rel="noopener">Print Parent PDF</a>
+          <button class="quiet-button" data-export-history="${student.id}" data-export-label="Full History PDF" type="button">Full History PDF</button>
         </div>
         ${isArchived ? `
           <div class="detail-state-actions">
@@ -2333,6 +2334,7 @@ async function deleteStepAdjustment(adjustmentId, studentId, label, confirmDocum
 }
 
 async function exportStudentHistory(button) {
+  const originalLabel = button.dataset.exportLabel || button.textContent;
   button.disabled = true;
   button.textContent = "Exporting...";
   try {
@@ -2355,7 +2357,7 @@ async function exportStudentHistory(button) {
     window.alert(error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "Export PDF";
+    button.textContent = originalLabel;
   }
 }
 
