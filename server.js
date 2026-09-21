@@ -46,6 +46,12 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 let mailTransporter;
 
 const STAFF_ROLES = new Set(["teacher", "tech_staff", "tech_admin"]);
+const STUDENT_DOCUMENT_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".png", ".jpg", ".jpeg"]);
+const STUDENT_DOCUMENT_TYPES = {
+  success_contract: "Technology Success Contract",
+  digital_reflection: "Digital Impact Reflection",
+  other: "Other"
+};
 const STAFF_ROLE_LABELS = {
   teacher: "Teacher",
   tech_staff: "Tech Staff",
@@ -1552,6 +1558,11 @@ function safeIncidentDocumentFileName(incidentId, originalName) {
   return `incident-${incidentId}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
 }
 
+function safeStudentDocumentFileName(studentId, originalName) {
+  const ext = path.extname(originalName || "").toLowerCase().replace(/[^a-z0-9.]/g, "") || ".pdf";
+  return `student-${studentId}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
+}
+
 function createOrUpdateStudent(row) {
   const firstName = required(row.first_name, "First name");
   const lastName = required(row.last_name, "Last name");
@@ -2083,6 +2094,7 @@ async function handleApi(req, res, url) {
       status: statusForStudent(id),
       automaticStatus: automaticStatusForStudent(id),
       activeAdjustment: activeAdjustmentForStudent(id),
+      ...deviceRestrictionSupervisionForStudent(id),
       ...successContractSupervisionForStudent(id),
       incidents,
       currentIncidents,
@@ -2105,6 +2117,65 @@ async function handleApi(req, res, url) {
       return res.end(pdf);
     }
     return sendJson(res, 200, history);
+  }
+
+  const studentDocumentMatch = url.pathname.match(/^\/api\/students\/(\d+)\/documents$/);
+  if (req.method === "POST" && studentDocumentMatch) {
+    const studentId = Number(studentDocumentMatch[1]);
+    const student = statements.getStudent.get(studentId);
+    if (!student) return sendJson(res, 404, { error: "Student not found" });
+    if (Number(student.active) !== 1) {
+      return sendJson(res, 400, { error: "Restore this student before adding a document." });
+    }
+    const body = await readBody(req);
+    const documentType = required(body.document_type, "Document type");
+    if (!STUDENT_DOCUMENT_TYPES[documentType]) {
+      return sendJson(res, 400, { error: "Choose Technology Success Contract, Digital Impact Reflection, or Other." });
+    }
+    const originalName = required(body.original_name, "File name");
+    const extension = path.extname(originalName).toLowerCase();
+    if (!STUDENT_DOCUMENT_EXTENSIONS.has(extension)) {
+      return sendJson(res, 400, { error: "Upload a PDF, Word document, PNG, or JPEG file." });
+    }
+    const title = documentType === "other"
+      ? required(body.title, "Document name")
+      : STUDENT_DOCUMENT_TYPES[documentType];
+    if (title.length > 120) {
+      return sendJson(res, 400, { error: "Document name must be 120 characters or fewer." });
+    }
+    const mimeType = nullable(body.mime_type) || "application/octet-stream";
+    const base64 = required(body.content_base64, "File content");
+    const bytes = Buffer.from(base64, "base64");
+    if (!bytes.length) return sendJson(res, 400, { error: "The selected document is empty." });
+    if (bytes.length > 10_000_000) {
+      return sendJson(res, 400, { error: "Document must be 10 MB or smaller." });
+    }
+    const storedName = safeStudentDocumentFileName(studentId, originalName);
+    fs.writeFileSync(path.join(DOCUMENT_DIR, storedName), bytes);
+    try {
+      const result = statements.insertDocument.run(
+        studentId,
+        null,
+        null,
+        currentTerm().id,
+        documentType,
+        title,
+        originalName,
+        storedName,
+        mimeType,
+        currentUser.email || currentUser.name || null
+      );
+      statements.addAudit.run(
+        "document",
+        Number(result.lastInsertRowid),
+        `${originalName} was uploaded as ${title} by ${currentUser.email || currentUser.name || "Unknown"}.`
+      );
+      const document = statements.getDocument.get(Number(result.lastInsertRowid));
+      return sendJson(res, 201, documentView(document));
+    } catch (error) {
+      fs.rmSync(path.join(DOCUMENT_DIR, storedName), { force: true });
+      throw error;
+    }
   }
 
   if (req.method === "DELETE" && studentMatch && !historyMatch) {

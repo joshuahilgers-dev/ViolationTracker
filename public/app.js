@@ -15,7 +15,8 @@ const state = {
   incidentHistoryRequest: 0,
   selectedStudentId: null,
   selectedFollowupStudentId: null,
-  selectedStatusKey: null
+  selectedStatusKey: null,
+  studentDetailReturnView: "dashboard"
 };
 
 const statusOrder = ["admin_review", "device_restriction", "success_contract", "reflection", "monitor", "warnings"];
@@ -168,6 +169,7 @@ function showApp(user) {
   els.teacherNav.hidden = !isTeacher;
   els.techNavButtons.forEach(button => { button.hidden = isTeacher; });
   els.adminNavButtons.forEach(button => { button.hidden = !isAdmin; });
+  els.clearStudentsButton.hidden = !(isAdmin && state.authConfig?.authDisabled);
   els.workspaceSwitcher.disabled = isTeacher;
   els.workspaceSwitcher.setAttribute("aria-label", isTeacher ? "Tech Violations" : "Switch technology workspace");
   els.workspaceIndicator.hidden = isTeacher;
@@ -678,6 +680,21 @@ function switchView(name) {
   els.workspaceMenu.hidden = true;
   els.workspaceSwitcher.setAttribute("aria-expanded", "false");
   document.dispatchEvent(new CustomEvent("tracker:viewchange", { detail: { name } }));
+}
+
+function activeViewName() {
+  return [...els.views].find(view => view.classList.contains("active"))?.id.replace(/-view$/, "") || "dashboard";
+}
+
+function closeStudentDetail({ openList = false } = {}) {
+  state.selectedStudentId = null;
+  els.studentDetail.hidden = true;
+  els.studentDetail.innerHTML = "";
+  document.querySelector("#students-view")?.classList.remove("student-profile-open");
+  if (openList) {
+    els.studentListPanel.open = true;
+    els.studentListPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function renderMetrics() {
@@ -1243,6 +1260,35 @@ function formatDate(value) {
   return `${month}/${day}/${year}`;
 }
 
+function formatLongDate(value) {
+  if (!value) return "";
+  const [year, month, day] = String(value).slice(0, 10).split("-").map(Number);
+  if (!year || !month || !day) return String(value);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(new Date(year, month - 1, day));
+}
+
+function friendlyTermName(value) {
+  const label = String(value || "");
+  const match = label.match(/^School Year starting (\d{4})-\d{2}-\d{2}$/i);
+  if (!match) return label;
+  const startYear = Number(match[1]);
+  return `${startYear}\u2013${String((startYear + 1) % 100).padStart(2, "0")} School Year`;
+}
+
+function studentReturnLabel(viewName) {
+  return {
+    students: "Back to student list",
+    followups: "Back to open follow-ups",
+    actions: "Back to action queue",
+    status: "Back to current step",
+    dashboard: "Back to dashboard"
+  }[viewName] || "Back to dashboard";
+}
+
 function statusStudentRow(student, key) {
   const returnBadge = key === "device_restriction"
     ? `<span class="return-date-badge ${escapeHtml(student.device_restriction_supervision_state || "needs_date")}">${student.chromebook_return_on
@@ -1280,7 +1326,8 @@ function incidentRows(incidents, allowRemoval = true, options = {}) {
   const allowMonitorReflection = options.statusKey === "monitor";
   return incidents.length ? incidents.map(incident => {
     const entryType = incidentEntryType(incident);
-    const entryLabel = entryType === "warning" ? "Warning" : `${incident.severity} violation`;
+    const severity = String(incident.severity || "");
+    const entryLabel = entryType === "warning" ? "Warning" : `${severity.charAt(0).toUpperCase()}${severity.slice(1)} violation`;
     const incidentDocuments = documents.filter(document => Number(document.incident_id) === Number(incident.id));
     const allowsReflectionUpload = allowRemoval
       && !incident.canceled_at
@@ -1289,15 +1336,20 @@ function incidentRows(incidents, allowRemoval = true, options = {}) {
     <article class="incident-row ${entryType === "warning" ? "warning" : ""} ${incident.canceled_at ? "canceled" : ""}" data-incident-id="${incident.id}">
       <div class="incident-heading">
         <h4>
-          ${escapeHtml(incident.occurred_on)}: ${escapeHtml(entryLabel)} - ${escapeHtml(incident.infraction_label || "Uncategorized")}
+          ${escapeHtml(formatLongDate(incident.occurred_on))} <span aria-hidden="true">\u00b7</span> ${escapeHtml(entryLabel)} <span aria-hidden="true">\u00b7</span> ${escapeHtml(incident.infraction_label || "Uncategorized")}
           ${entryType === "warning" ? `<span class="warning-badge">Does not count</span>` : ""}
           ${incident.canceled_at ? `<span class="canceled-badge">Removed</span>` : ""}
         </h4>
         ${allowRemoval && !incident.canceled_at ? `
-          <div class="row-actions">
+          <div class="row-actions incident-row-actions">
             <button class="quiet-button compact-button" data-edit-incident-notes="${incident.id}" data-incident-notes="${encodeURIComponent(String(incident.notes || ""))}" data-entry-type="${entryType}">Edit notes</button>
-            ${entryType === "violation" ? `<button class="quiet-button compact-button" data-convert-incident="${incident.id}">Convert to warning</button>` : ""}
-            <button class="danger-button compact-button" data-cancel-incident="${incident.id}" data-entry-type="${entryType}">Remove ${entryType}</button>
+            <details class="record-actions-menu incident-actions-menu">
+              <summary class="quiet-button compact-button">More</summary>
+              <div class="record-actions-popover">
+                ${entryType === "violation" ? `<button class="quiet-button compact-button" data-convert-incident="${incident.id}">Convert to warning</button>` : ""}
+                <button class="danger-button compact-button" data-cancel-incident="${incident.id}" data-entry-type="${entryType}">Remove ${entryType}</button>
+              </div>
+            </details>
           </div>
         ` : ""}
       </div>
@@ -1305,7 +1357,7 @@ function incidentRows(incidents, allowRemoval = true, options = {}) {
         <span>Reported by ${escapeHtml(incident.reported_by)}</span>
         ${incident.class_period ? `<span>Period ${escapeHtml(incident.class_period)}</span>` : ""}
         ${incident.category ? `<span>${escapeHtml(incident.category)}</span>` : ""}
-        ${incident.term_name ? `<span>${escapeHtml(incident.term_name)}</span>` : ""}
+        ${incident.term_name ? `<span>${escapeHtml(friendlyTermName(incident.term_name))}</span>` : ""}
         ${incident.canceled_by ? `<span>Removed by ${escapeHtml(incident.canceled_by)}</span>` : ""}
         ${incident.converted_by ? `<span>Converted by ${escapeHtml(incident.converted_by)}</span>` : ""}
       </div>
@@ -1330,15 +1382,49 @@ function profileDocumentCard(document) {
   return `
     <article class="list-row">
       <div>
-        <h4>${escapeHtml(document.original_name)}</h4>
+        <h4>${escapeHtml(document.title || document.action_title || "Student document")}</h4>
         <div class="meta">
-          <span>${escapeHtml(document.title || document.action_title || "Student document")}</span>
-          ${document.term_name ? `<span>${escapeHtml(document.term_name)}</span>` : ""}
-          <span>Uploaded ${escapeHtml(String(document.uploaded_at || "").slice(0, 10))}</span>
+          <span>${escapeHtml(document.original_name)}</span>
+          ${document.term_name ? `<span>${escapeHtml(friendlyTermName(document.term_name))}</span>` : ""}
+          ${document.uploaded_by ? `<span>Uploaded by ${escapeHtml(document.uploaded_by)}</span>` : ""}
+          <span>Uploaded ${escapeHtml(formatLongDate(document.uploaded_at))}</span>
         </div>
       </div>
-      <a class="quiet-link-button" href="${escapeHtml(document.url)}" target="_blank" rel="noopener">Open</a>
+      <a class="quiet-link-button" href="${escapeHtml(document.url)}" target="_blank" rel="noopener">Open / print</a>
     </article>
+  `;
+}
+
+function profileDocumentControls(student, isArchived) {
+  if (isArchived) return `<h4 class="section-title">Stored Documents</h4>`;
+  const printableForms = ["success_contract", "digital_reflection"]
+    .map(actionType => templateForAction(actionType))
+    .filter(Boolean);
+  const printMenu = state.currentUser?.role === "tech_admin" ? `
+    <details class="record-actions-menu document-actions-menu">
+      <summary class="quiet-button">Print Blank Form</summary>
+      <div class="record-actions-popover document-actions-popover">
+        ${printableForms.length
+          ? printableForms.map(template => `<button type="button" class="quiet-button" data-print-template="${escapeHtml(template.url)}">${escapeHtml(template.label.replace(/ due$/i, ""))}</button>`).join("")
+          : `<span class="menu-empty">No printable forms configured.</span>`}
+      </div>
+    </details>
+  ` : "";
+  return `
+    <div class="document-section-heading">
+      <h4 class="section-title">Stored Documents</h4>
+      <div class="row-actions">
+        <details class="record-actions-menu document-actions-menu">
+          <summary class="primary-button">Upload Document</summary>
+          <div class="record-actions-popover document-actions-popover">
+            <button type="button" class="quiet-button" data-upload-student-document="${student.id}" data-document-type="success_contract">Technology Success Contract</button>
+            <button type="button" class="quiet-button" data-upload-student-document="${student.id}" data-document-type="digital_reflection">Digital Impact Reflection</button>
+            <button type="button" class="quiet-button" data-upload-student-document="${student.id}" data-document-type="other">Other</button>
+          </div>
+        </details>
+        ${printMenu}
+      </div>
+    </div>
   `;
 }
 
@@ -1351,25 +1437,32 @@ function stepAdjustmentOptions(student) {
     .join("");
 }
 
-function successContractCheckInEditor(student) {
+function currentStepTiming(student) {
   if (student.status?.key !== "success_contract"
     || !student.success_contract_action_id
     || student.success_contract_action_status !== "complete") {
-    return "";
+    if (student.status?.key !== "device_restriction") return "";
+    const date = student.chromebook_return_on;
+    const satisfied = student.device_restriction_supervision_state === "satisfied";
+    return `
+      <div class="current-step-timing ${satisfied ? "ended" : date ? "active" : "needs-date"}">
+        <strong>${date
+          ? `${satisfied ? "Restriction period satisfied" : "Chromebook return scheduled"} ${escapeHtml(formatLongDate(date))}`
+          : "Chromebook return date needed"}</strong>
+      </div>
+    `;
   }
   const ended = student.success_contract_supervision_state === "ended";
   const needsDate = student.success_contract_supervision_state === "needs_date";
   return `
-    <section class="contract-check-in-editor ${ended ? "ended" : needsDate ? "needs-date" : "active"}">
-      <div>
-        <strong>${ended ? "Daily teacher check-ins ended" : needsDate ? "Daily teacher check-in date needed" : "Daily teacher check-ins active"}</strong>
-        <p>${needsDate
-          ? "Enter the final day of teacher check-ins. Until a date is saved, this student remains visible in the teacher dashboard's main contract section."
-          : ended
-          ? "The student remains on the Technology Success Contract step and is hidden from the teacher dashboard's main contract section."
-          : "The student remains on the teacher dashboard's main contract section through this date."}</p>
+    <div class="current-step-timing ${ended ? "ended" : needsDate ? "needs-date" : "active"}">
+      <div class="current-step-timing-summary">
+        <strong>${needsDate
+          ? "Daily teacher check-in date needed"
+          : `Daily teacher check-ins ${ended ? "ended" : "through"} ${escapeHtml(formatLongDate(student.success_contract_check_in_through))}`}</strong>
+        ${needsDate ? "" : `<button type="button" class="text-button" data-toggle-contract-date="${student.success_contract_action_id}">Edit date</button>`}
       </div>
-      <form data-success-contract-date-form="${student.success_contract_action_id}">
+      <form data-success-contract-date-form="${student.success_contract_action_id}" ${needsDate ? "" : "hidden"}>
         <label>
           Daily teacher check-ins through
           <input type="date" name="check_in_through" value="${escapeHtml(student.success_contract_check_in_through || "")}" required>
@@ -1377,6 +1470,22 @@ function successContractCheckInEditor(student) {
         <button type="submit" class="quiet-button">Save date</button>
         <span role="status"></span>
       </form>
+    </div>
+  `;
+}
+
+function currentStepCard(student) {
+  return `
+    <section class="current-step-card ${escapeHtml(student.status?.key || "no_violations")}">
+      <div class="current-step-main">
+        <div>
+          <span class="section-eyebrow">Current step</span>
+          <h4>${escapeHtml(student.status?.label || "No violations")}</h4>
+          <p>${escapeHtml(student.status?.description || "")}</p>
+        </div>
+        <button class="quiet-button" data-toggle-step-adjust="${student.id}">Manage Current Step</button>
+      </div>
+      ${currentStepTiming(student)}
     </section>
   `;
 }
@@ -1414,18 +1523,25 @@ function stepAdjustmentForm(student) {
 
 function adjustmentRows(adjustments, allowManagement = false) {
   return adjustments.length ? adjustments.map(adjustment => `
-    <article class="incident-row">
+    <article class="incident-row adjustment-row ${adjustment.ended_at ? "ended" : "active"}">
       <div class="incident-heading">
-        <h4>${escapeHtml(String(adjustment.created_at || "").slice(0, 10))}: moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
-        ${allowManagement ? `<button class="danger-button compact-button" data-delete-step-adjustment="${adjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}">Delete accidental adjustment</button>` : ""}
+        <h4>${escapeHtml(formatLongDate(adjustment.created_at))} <span aria-hidden="true">\u00b7</span> Moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
+        ${allowManagement ? `
+          <details class="record-actions-menu incident-actions-menu">
+            <summary class="quiet-button compact-button">More</summary>
+            <div class="record-actions-popover">
+              <button class="danger-button compact-button" data-delete-step-adjustment="${adjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}">Delete accidental adjustment</button>
+            </div>
+          </details>
+        ` : ""}
       </div>
       <div class="meta">
-        ${adjustment.term_name ? `<span>${escapeHtml(adjustment.term_name)}</span>` : ""}
+        ${adjustment.term_name ? `<span>${escapeHtml(friendlyTermName(adjustment.term_name))}</span>` : ""}
         ${adjustment.adjusted_by ? `<span>Adjusted by ${escapeHtml(adjustment.adjusted_by)}</span>` : ""}
         <span>${adjustment.ended_at ? "Ended" : "Active override"}</span>
       </div>
       <p>${escapeHtml(adjustment.reason)}</p>
-      ${adjustment.ended_at ? `<p><strong>Ended:</strong> ${escapeHtml(String(adjustment.ended_at).slice(0, 10))}${adjustment.ended_by ? ` by ${escapeHtml(adjustment.ended_by)}` : ""}. ${escapeHtml(adjustment.ended_reason || "")}</p>` : ""}
+      ${adjustment.ended_at ? `<p><strong>Ended:</strong> ${escapeHtml(formatLongDate(adjustment.ended_at))}${adjustment.ended_by ? ` by ${escapeHtml(adjustment.ended_by)}` : ""}. ${escapeHtml(adjustment.ended_reason || "")}</p>` : ""}
     </article>
   `).join("") : `<div class="empty">No administrative step adjustments recorded.</div>`;
 }
@@ -1467,6 +1583,7 @@ async function showStudentDetail(id) {
   els.studentListPanel.open = false;
   const student = await api(`/api/students/${id}`);
   els.studentListPanel.open = false;
+  document.querySelector("#students-view")?.classList.add("student-profile-open");
   state.selectedStudentId = id;
   state.selectedFollowupStudentId = null;
   const isArchived = Number(student.active) === 0;
@@ -1489,8 +1606,7 @@ async function showStudentDetail(id) {
       </div>
       <div class="detail-actions">
         <div class="detail-primary-actions">
-          <button class="quiet-button" data-open-view="dashboard">Back to dashboard</button>
-          ${isArchived ? "" : `<button class="quiet-button" data-toggle-step-adjust="${student.id}">Manage Current Step</button>`}
+          <button class="quiet-button" data-return-from-student>${escapeHtml(studentReturnLabel(state.studentDetailReturnView))}</button>
           <button class="primary-button" data-export-history="${student.id}" type="button">Export PDF</button>
         </div>
         ${isArchived ? `
@@ -1508,51 +1624,60 @@ async function showStudentDetail(id) {
         `}
       </div>
     </div>
-    ${isArchived ? "" : stepAdjustmentForm(student)}
     ${isArchived ? `
       <div class="archived-note">
         This student is archived and hidden from active workflows. Restore the student to enter new violations or warnings or include them in active lists.
       </div>
     ` : ""}
-    <div class="detail-grid">
+    <div class="detail-grid detail-count-grid">
       <div class="detail-stat"><span>Total violations</span><strong>${Number(student.counts.total_count || 0)}</strong></div>
       <div class="detail-stat"><span>Minor</span><strong>${Number(student.counts.minor_count || 0)}</strong></div>
       <div class="detail-stat"><span>Major</span><strong>${Number(student.counts.major_count || 0)}</strong></div>
       <div class="detail-stat"><span>Warnings</span><strong>${Number(student.counts.warning_count || 0)}</strong></div>
-      <div class="detail-stat ${isArchived ? "" : "full-width"}"><span>${isArchived ? "Archived date" : "Current step"}</span><strong>${escapeHtml(isArchived ? student.archived_at || "Not set" : student.status.description)}</strong></div>
-      ${isArchived ? `<div class="detail-stat full-width"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>` : ""}
     </div>
-    ${isArchived ? "" : successContractCheckInEditor(student)}
+    ${isArchived ? `
+      <div class="detail-grid archived-detail-grid">
+        <div class="detail-stat"><span>Archived date</span><strong>${escapeHtml(formatLongDate(student.archived_at) || "Not set")}</strong></div>
+        <div class="detail-stat"><span>Archive reason</span><strong>${escapeHtml(student.archived_reason || "Not set")}</strong></div>
+      </div>
+    ` : currentStepCard(student)}
+    ${isArchived ? "" : stepAdjustmentForm(student)}
     ${isArchived ? "" : `
-      <h4 class="section-title">Open Follow-Ups</h4>
-      <div class="timeline">
-        ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty">No open follow-ups for this student.</div>`}
+      <h4 class="section-title">Open Follow-Ups${openActions.length ? ` (${openActions.length})` : ""}</h4>
+      <div class="timeline followup-timeline">
+        ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty compact-empty positive-empty"><span aria-hidden="true">\u2713</span> No open follow-ups for this student.</div>`}
       </div>
     `}
-    <h4 class="section-title">Technology History: Current Term</h4>
+    ${profileDocumentControls(student, isArchived)}
+    <div class="document-library">
+      ${documents.length ? documents.map(profileDocumentCard).join("") : `<div class="empty compact-empty">No documents uploaded yet.</div>`}
+    </div>
+    <h4 class="section-title">Technology History <span aria-hidden="true">\u00b7</span> Current Term</h4>
     <div class="timeline">
       ${incidentRows(currentIncidents, !isArchived, { documents, statusKey: student.status.key })}
     </div>
-    <h4 class="section-title">Administrative Step Adjustments: Current Term</h4>
-    <div class="timeline">
+    ${currentAdjustments.length ? `
+      <h4 class="section-title">Administrative History <span aria-hidden="true">\u00b7</span> Current Term</h4>
+      <div class="timeline">
         ${adjustmentRows(currentAdjustments, !isArchived)}
-    </div>
-    <details class="history-details">
-      <summary>Technology History: Previous Terms (${previousIncidents.length})</summary>
-      <div class="timeline">
-        ${incidentRows(previousIncidents, false, { documents })}
       </div>
-    </details>
-    <details class="history-details">
-      <summary>Administrative Step Adjustments: Previous Terms (${previousAdjustments.length})</summary>
-      <div class="timeline">
+    ` : ""}
+    ${previousIncidents.length ? `
+      <details class="history-details">
+        <summary>Technology History: Previous Terms (${previousIncidents.length})</summary>
+        <div class="timeline">
+          ${incidentRows(previousIncidents, false, { documents })}
+        </div>
+      </details>
+    ` : ""}
+    ${previousAdjustments.length ? `
+      <details class="history-details">
+        <summary>Administrative Step Adjustments: Previous Terms (${previousAdjustments.length})</summary>
+        <div class="timeline">
           ${adjustmentRows(previousAdjustments, !isArchived)}
-      </div>
-    </details>
-    <h4 class="section-title">Stored Documents</h4>
-    <div class="document-library">
-      ${documents.length ? documents.map(profileDocumentCard).join("") : `<div class="empty">No documents uploaded.</div>`}
-    </div>
+        </div>
+      </details>
+    ` : ""}
   `;
   setTimeout(() => {
     els.studentDetail.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2240,6 +2365,74 @@ function printTemplate(url) {
   win.addEventListener("load", () => win.print(), { once: true });
 }
 
+function openStudentDocumentUploadDialog(studentId, documentType) {
+  const labels = {
+    success_contract: "Technology Success Contract",
+    digital_reflection: "Digital Impact Reflection",
+    other: "Other"
+  };
+  const label = documentType === "other" ? "Other Document" : labels[documentType];
+  if (!label) return;
+  const dialog = document.createElement("dialog");
+  dialog.className = "decision-dialog document-upload-dialog";
+  dialog.innerHTML = `
+    <form method="dialog" data-student-document-upload-form="${studentId}">
+      <input type="hidden" name="document_type" value="${escapeHtml(documentType)}">
+      <h3>Upload ${escapeHtml(label)}</h3>
+      <p>Add this document to the student's record. Uploading it will not complete a follow-up or change the student's current step.</p>
+      ${documentType === "other" ? `
+        <label>
+          Document name
+          <input name="title" maxlength="120" placeholder="Enter a descriptive name" required>
+        </label>
+      ` : ""}
+      <label>
+        File
+        <input type="file" name="document_file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" required>
+      </label>
+      <div class="decision-actions">
+        <button type="submit" class="primary-button">Upload document</button>
+        <button type="button" class="quiet-button" data-close-document-upload>Cancel</button>
+        <span role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  `;
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+async function uploadStudentDocument(form) {
+  const studentId = Number(form.dataset.studentDocumentUploadForm);
+  const file = form.elements.document_file.files[0];
+  if (!file) return;
+  const submitButton = form.querySelector("button[type='submit']");
+  const status = form.querySelector("[role='status']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Uploading...";
+  status.textContent = "Uploading...";
+  try {
+    await api(`/api/students/${studentId}/documents`, {
+      method: "POST",
+      body: JSON.stringify({
+        document_type: form.elements.document_type.value,
+        title: form.elements.title?.value || null,
+        original_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    form.closest("dialog")?.close();
+    if (state.selectedStudentId === studentId) await showStudentDetail(studentId);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2357,9 +2550,7 @@ async function deleteStudent(id, name) {
     method: "DELETE",
     body: JSON.stringify({})
   });
-  state.selectedStudentId = null;
-  els.studentDetail.hidden = true;
-  els.studentDetail.innerHTML = "";
+  closeStudentDetail();
   await loadBootstrap();
 }
 
@@ -2370,9 +2561,7 @@ async function clearAllStudents() {
     method: "DELETE",
     body: JSON.stringify({ confirmation: phrase })
   });
-  state.selectedStudentId = null;
-  els.studentDetail.hidden = true;
-  els.studentDetail.innerHTML = "";
+  closeStudentDetail();
   await loadBootstrap();
 }
 
@@ -2462,15 +2651,35 @@ document.addEventListener("click", event => {
   }
 
   const nav = event.target.closest("[data-view]");
-  if (nav) switchView(nav.dataset.view);
+  if (nav) {
+    const showStudentList = nav.dataset.view === "students" && Boolean(state.selectedStudentId);
+    if (showStudentList) closeStudentDetail();
+    switchView(nav.dataset.view);
+    if (showStudentList) {
+      els.studentListPanel.open = true;
+      els.studentListPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 
   const openView = event.target.closest("[data-open-view]");
   if (openView) switchView(openView.dataset.openView);
 
   const studentButton = event.target.closest("[data-student-id]");
   if (studentButton) {
+    state.studentDetailReturnView = activeViewName();
     switchView("students");
     showStudentDetail(Number(studentButton.dataset.studentId));
+  }
+
+  const returnFromStudent = event.target.closest("[data-return-from-student]");
+  if (returnFromStudent) {
+    const returnView = state.studentDetailReturnView || "dashboard";
+    closeStudentDetail();
+    switchView(returnView === "students" ? "students" : returnView);
+    if (returnView === "students") {
+      els.studentListPanel.open = true;
+      els.studentListPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   }
 
   const completeButton = event.target.closest("[data-complete-action]");
@@ -2497,6 +2706,29 @@ document.addEventListener("click", event => {
   if (adjustStepButton) {
     const form = document.querySelector(`[data-step-adjust-form="${adjustStepButton.dataset.toggleStepAdjust}"]`);
     if (form) form.hidden = !form.hidden;
+  }
+
+  const contractDateButton = event.target.closest("[data-toggle-contract-date]");
+  if (contractDateButton) {
+    const form = document.querySelector(`[data-success-contract-date-form="${contractDateButton.dataset.toggleContractDate}"]`);
+    if (form) {
+      form.hidden = !form.hidden;
+      contractDateButton.textContent = form.hidden ? "Edit date" : "Cancel editing";
+    }
+  }
+
+  const uploadStudentDocumentButton = event.target.closest("[data-upload-student-document]");
+  if (uploadStudentDocumentButton) {
+    const menu = uploadStudentDocumentButton.closest("details");
+    if (menu) menu.open = false;
+    openStudentDocumentUploadDialog(
+      Number(uploadStudentDocumentButton.dataset.uploadStudentDocument),
+      uploadStudentDocumentButton.dataset.documentType
+    );
+  }
+
+  if (event.target.closest("[data-close-document-upload]")) {
+    event.target.closest("dialog")?.close();
   }
 
   const endStepAdjustmentButton = event.target.closest("[data-end-step-adjustment]");
@@ -2583,6 +2815,13 @@ document.addEventListener("change", event => {
 });
 
 document.addEventListener("submit", event => {
+  const studentDocumentUploadForm = event.target.closest("[data-student-document-upload-form]");
+  if (studentDocumentUploadForm) {
+    event.preventDefault();
+    uploadStudentDocument(studentDocumentUploadForm);
+    return;
+  }
+
   const infractionEditForm = event.target.closest("[data-infraction-edit-form]");
   if (infractionEditForm) {
     event.preventDefault();
