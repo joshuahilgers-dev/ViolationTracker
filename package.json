@@ -5,6 +5,7 @@
   "description": "Local school technology violation tracking app",
   "scripts": {
     "build": "node scripts/build-check.js",
+    "test:policy": "node scripts/test-responsible-use-policy.js",
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
@@ -12,6 +13,7 @@
     "dotenv": "^16.4.7",
     "google-auth-library": "9.15.1",
     "nodemailer": "^8.0.7",
+    "pdf-lib": "1.17.1",
     "pdfkit": "0.20.2",
     "sql.js": "1.10.3"
   },

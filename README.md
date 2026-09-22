@@ -201,6 +201,13 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - Teachers see the scheduled Chromebook return date through that date. Afterward, the student moves into a collapsed satisfied-restrictions subsection inside the 5 school-day restriction panel while remaining visible to Tech Staff and Tech Admin.
 - Fifth or later violation: queue admin review and parent contact.
 
+## Parent PDFs
+
+- **Print Parent PDF** creates a parent-facing technology history without internal administrative details.
+- A Tech Admin can upload one current **Responsible Use Policy** PDF from Settings. All pages of that file are appended to every newly generated Parent PDF.
+- Replacing or removing the policy affects future Parent PDFs only. The internal **Full History PDF** is never given the policy attachment.
+- Policy uploads must be valid, unencrypted PDFs no larger than 10 MB and are stored locally in `data/templates`.
+
 ## Chromebook Repair And Fine Workflow
 
 - Start a repair or fine by finding a student by name or scanning their student ID.
@@ -220,6 +227,7 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - `infraction_types`: configurable minor and major violation categories.
 - `incidents`: teacher/staff violation reports.
 - `actions`: parent contact, reflection upload, contract, restriction, re-entry, and admin follow-ups, including the success-contract teacher check-in-through date.
+- `action_templates`: printable follow-up forms and the current Responsible Use Policy attachment.
 - `audit_log`: basic record of important changes.
 - `chromebook_repairs`: repair and fine records, Chromebook Care status, parent-notice status, and Skyward-entry status.
 - `repair_fee_schedule`: editable with/without Chromebook Care amounts.

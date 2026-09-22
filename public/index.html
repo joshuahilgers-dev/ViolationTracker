@@ -537,6 +537,23 @@
           <section class="panel template-panel">
             <div class="panel-heading">
               <div>
+                <h3>Parent PDF Attachment</h3>
+                <p class="panel-note">Upload the current Responsible Use Policy once. All of its pages will be appended to every Parent PDF; the internal Full History PDF will not include it.</p>
+              </div>
+            </div>
+            <form id="responsible-use-policy-form" class="template-form">
+              <label>
+                Responsible Use Policy PDF
+                <input type="file" name="policy_file" accept=".pdf,application/pdf" required>
+              </label>
+              <button type="submit" class="primary-button">Upload policy</button>
+              <span id="responsible-use-policy-message" role="status"></span>
+            </form>
+            <div id="responsible-use-policy-status" class="template-list"></div>
+          </section>
+          <section class="panel template-panel">
+            <div class="panel-heading">
+              <div>
                 <h3>Printable Forms</h3>
                 <p class="panel-note">Upload forms staff may need to print from the follow-up queue.</p>
               </div>

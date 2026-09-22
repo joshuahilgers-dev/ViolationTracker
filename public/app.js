@@ -101,6 +101,9 @@ const els = {
   templateForm: document.querySelector("#template-form"),
   templateMessage: document.querySelector("#template-message"),
   templateList: document.querySelector("#template-list"),
+  responsibleUsePolicyForm: document.querySelector("#responsible-use-policy-form"),
+  responsibleUsePolicyMessage: document.querySelector("#responsible-use-policy-message"),
+  responsibleUsePolicyStatus: document.querySelector("#responsible-use-policy-status"),
   infractionSettings: document.querySelector("#infraction-settings"),
   infractionTypeForm: document.querySelector("#infraction-type-form"),
   infractionMessage: document.querySelector("#infraction-message"),
@@ -283,6 +286,7 @@ function renderAll() {
   renderStudents();
   if (!els.archivedStudentSearch.value.trim()) renderArchivedStudents([], "");
   renderActions();
+  renderResponsibleUsePolicy();
   renderTemplates();
   renderInfractionSettings();
   renderTermSettings();
@@ -1258,6 +1262,24 @@ function formatDate(value) {
   const [year, month, day] = String(value).split("-");
   if (!year || !month || !day) return value;
   return `${month}/${day}/${year}`;
+}
+
+function renderResponsibleUsePolicy() {
+  const policy = templateForAction("responsible_use_policy");
+  els.responsibleUsePolicyStatus.innerHTML = `
+    <article class="list-row">
+      <div>
+        <h4>Responsible Use Policy</h4>
+        <div class="meta">${policy
+          ? `Uploaded: ${escapeHtml(policy.original_name)}. It is included at the end of every Parent PDF.`
+          : "No policy uploaded. Parent PDFs currently include technology history only."}</div>
+      </div>
+      <div class="row-actions">
+        ${policy ? `<button class="quiet-button" data-print-policy="${escapeHtml(policy.url)}">Open / print</button>` : ""}
+        ${policy ? `<button class="danger-button" data-delete-policy>Remove</button>` : ""}
+      </div>
+    </article>
+  `;
 }
 
 function formatLongDate(value) {
@@ -2567,6 +2589,58 @@ async function clearAllStudents() {
   await loadBootstrap();
 }
 
+async function uploadResponsibleUsePolicy(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const file = form.elements.policy_file.files[0];
+  if (!file) return;
+  const submitButton = form.querySelector("button[type='submit']");
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = "Uploading...";
+  els.responsibleUsePolicyMessage.textContent = "Uploading and checking PDF...";
+  try {
+    const policy = await api("/api/settings/responsible-use-policy", {
+      method: "POST",
+      body: JSON.stringify({
+        original_name: file.name,
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    state.templates = state.templates
+      .filter(item => item.action_type !== policy.action_type)
+      .concat(policy);
+    form.reset();
+    renderResponsibleUsePolicy();
+    const pages = Number(policy.page_count || 0);
+    els.responsibleUsePolicyMessage.textContent = `Policy uploaded${pages ? ` (${pages} page${pages === 1 ? "" : "s"})` : ""}.`;
+    setTimeout(() => { els.responsibleUsePolicyMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.responsibleUsePolicyMessage.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
+async function deleteResponsibleUsePolicy() {
+  const confirmed = window.confirm("Remove the Responsible Use Policy from future Parent PDFs? Existing downloaded PDFs will not change.");
+  if (!confirmed) return;
+  els.responsibleUsePolicyMessage.textContent = "Removing...";
+  try {
+    await api("/api/settings/responsible-use-policy", {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    state.templates = state.templates.filter(template => template.action_type !== "responsible_use_policy");
+    renderResponsibleUsePolicy();
+    els.responsibleUsePolicyMessage.textContent = "Policy removed from future Parent PDFs.";
+    setTimeout(() => { els.responsibleUsePolicyMessage.textContent = ""; }, 5000);
+  } catch (error) {
+    els.responsibleUsePolicyMessage.textContent = error.message;
+  }
+}
+
 async function startNewTerm() {
   const phrase = window.prompt("This will move current-term warnings and violations into Previous Terms and reset active counts/follow-ups. Type START NEW TERM to continue.");
   if (phrase !== "START NEW TERM") return;
@@ -2760,6 +2834,11 @@ document.addEventListener("click", event => {
   const printButton = event.target.closest("[data-print-template]");
   if (printButton) printTemplate(printButton.dataset.printTemplate);
 
+  const printPolicyButton = event.target.closest("[data-print-policy]");
+  if (printPolicyButton) printTemplate(printPolicyButton.dataset.printPolicy);
+
+  if (event.target.closest("[data-delete-policy]")) deleteResponsibleUsePolicy();
+
   const deleteTemplateButton = event.target.closest("[data-delete-template]");
   if (deleteTemplateButton) {
     deleteTemplate(deleteTemplateButton.dataset.deleteTemplate, deleteTemplateButton.dataset.templateLabel);
@@ -2854,6 +2933,7 @@ els.clearStudentsButton.addEventListener("click", clearAllStudents);
 els.startTermButton.addEventListener("click", startNewTerm);
 els.notificationForm.addEventListener("submit", saveNotificationSettings);
 els.infractionTypeForm.addEventListener("submit", createInfractionType);
+els.responsibleUsePolicyForm.addEventListener("submit", uploadResponsibleUsePolicy);
 els.templateForm.addEventListener("submit", uploadTemplate);
 els.staffAccessForm.addEventListener("submit", addStaffAccess);
 els.logoutButton.addEventListener("click", logout);

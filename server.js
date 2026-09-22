@@ -8,13 +8,14 @@ const { OAuth2Client } = require("google-auth-library");
 const initSqlJs = require("sql.js");
 const nodemailer = require("nodemailer");
 const { createStudentHistoryPdf, historyFilename } = require("./student-history-pdf.cjs");
+const { appendPdf, inspectPdf } = require("./pdf-attachments.cjs");
 const { createChromebookRepairs } = require("./chromebook-repairs.cjs");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
-const TEMPLATE_DIR = path.join(DATA_DIR, "templates");
+const TEMPLATE_DIR = process.env.TEMPLATE_DIR || path.join(DATA_DIR, "templates");
 const DOCUMENT_DIR = path.join(DATA_DIR, "documents");
 const REPAIR_PHOTO_DIR = process.env.REPAIR_PHOTO_DIR || path.join(DATA_DIR, "repair-photos");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
@@ -34,6 +35,7 @@ const SESSION_COOKIE = "tvt_session";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const CURRENT_TERM_SETTING = "current_term_id";
 const TEAM_NOTIFICATION_EMAILS_SETTING = "team_notification_emails";
+const RESPONSIBLE_USE_POLICY_TEMPLATE = "responsible_use_policy";
 const APP_BASE_URL = (process.env.APP_BASE_URL || "http://vtrack.wrps.org:4173").replace(/\/$/, "");
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -1886,6 +1888,7 @@ async function handleApi(req, res, url) {
 
   const adminMutation =
     (url.pathname === "/api/settings/notifications" && req.method !== "GET")
+    || (url.pathname === "/api/settings/responsible-use-policy" && req.method !== "GET")
     || (url.pathname.startsWith("/api/infraction-types") && req.method !== "GET")
     || url.pathname.startsWith("/api/roster-rollover/")
     || url.pathname === "/api/terms/start"
@@ -2109,7 +2112,14 @@ async function handleApi(req, res, url) {
     if (historyMatch || parentHistoryMatch) {
       const generatedAt = new Date();
       const audience = parentHistoryMatch ? "parent" : "full";
-      const pdf = await createStudentHistoryPdf(history, term, generatedAt, { audience });
+      let pdf = await createStudentHistoryPdf(history, term, generatedAt, { audience });
+      if (parentHistoryMatch) {
+        const policy = statements.getTemplate.get(RESPONSIBLE_USE_POLICY_TEMPLATE);
+        if (policy) {
+          const policyPath = path.join(TEMPLATE_DIR, policy.stored_name);
+          pdf = await appendPdf(pdf, fs.readFileSync(policyPath));
+        }
+      }
       res.writeHead(200, {
         "Content-Type": "application/pdf",
         "Content-Disposition": (parentHistoryMatch ? "inline" : "attachment")
@@ -2612,9 +2622,63 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, statements.listTemplates.all().map(templateView));
   }
 
+  if (req.method === "POST" && url.pathname === "/api/settings/responsible-use-policy") {
+    const body = await readBody(req);
+    const originalName = required(body.original_name, "File name");
+    if (originalName.length > 255) {
+      return sendJson(res, 400, { error: "File name must be 255 characters or fewer." });
+    }
+    if (path.extname(originalName).toLowerCase() !== ".pdf") {
+      return sendJson(res, 400, { error: "Upload the Responsible Use Policy as a PDF." });
+    }
+    const base64 = required(body.content_base64, "File content");
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.length > 10_000_000) {
+      return sendJson(res, 400, { error: "Responsible Use Policy must be 10 MB or smaller." });
+    }
+    let pageCount;
+    try {
+      ({ pageCount } = await inspectPdf(bytes));
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message });
+    }
+    const storedName = safeTemplateFileName(RESPONSIBLE_USE_POLICY_TEMPLATE, originalName);
+    const previous = statements.getTemplate.get(RESPONSIBLE_USE_POLICY_TEMPLATE);
+    fs.writeFileSync(path.join(TEMPLATE_DIR, storedName), bytes);
+    statements.upsertTemplate.run(
+      RESPONSIBLE_USE_POLICY_TEMPLATE,
+      "Responsible Use Policy",
+      originalName,
+      storedName,
+      "application/pdf"
+    );
+    if (previous?.stored_name && previous.stored_name !== storedName) {
+      fs.rmSync(path.join(TEMPLATE_DIR, previous.stored_name), { force: true });
+    }
+    statements.addAudit.run("template", 0, `Responsible Use Policy was uploaded (${pageCount} page${pageCount === 1 ? "" : "s"}).`);
+    return sendJson(res, 200, {
+      ...templateView(statements.getTemplate.get(RESPONSIBLE_USE_POLICY_TEMPLATE)),
+      page_count: pageCount
+    });
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/settings/responsible-use-policy") {
+    const policy = statements.getTemplate.get(RESPONSIBLE_USE_POLICY_TEMPLATE);
+    if (!policy) return sendJson(res, 404, { error: "Responsible Use Policy not found" });
+    statements.deleteTemplate.run(RESPONSIBLE_USE_POLICY_TEMPLATE);
+    if (policy.stored_name) {
+      fs.rmSync(path.join(TEMPLATE_DIR, policy.stored_name), { force: true });
+    }
+    statements.addAudit.run("template", 0, "Responsible Use Policy was removed from parent PDFs.");
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/templates") {
     const body = await readBody(req);
     const actionType = required(body.action_type, "Action type");
+    if (actionType === RESPONSIBLE_USE_POLICY_TEMPLATE) {
+      return sendJson(res, 400, { error: "Use the Responsible Use Policy setting for this file." });
+    }
     const label = required(body.label, "Label");
     const originalName = required(body.original_name, "File name");
     const mimeType = nullable(body.mime_type) || "application/octet-stream";
@@ -2637,6 +2701,9 @@ async function handleApi(req, res, url) {
   const templateMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
   if (req.method === "DELETE" && templateMatch) {
     const actionType = decodeURIComponent(templateMatch[1]);
+    if (actionType === RESPONSIBLE_USE_POLICY_TEMPLATE) {
+      return sendJson(res, 400, { error: "Use the Responsible Use Policy setting for this file." });
+    }
     const template = statements.getTemplate.get(actionType);
     if (!template) return sendJson(res, 404, { error: "Form not found" });
     statements.deleteTemplate.run(actionType);
