@@ -1412,7 +1412,14 @@ function profileDocumentCard(document) {
           <span>Uploaded ${escapeHtml(formatLongDate(document.uploaded_at))}</span>
         </div>
       </div>
-      <a class="quiet-link-button" href="${escapeHtml(document.url)}" target="_blank" rel="noopener">Open / print</a>
+      <div class="row-actions">
+        <a class="quiet-link-button" href="${escapeHtml(document.url)}" target="_blank" rel="noopener">Open / print</a>
+        <button type="button" class="quiet-button" data-update-student-document="${document.id}"
+          data-document-name="${escapeHtml(document.original_name)}"
+          data-document-title="${escapeHtml(document.title || document.action_title || "Student document")}">Update</button>
+        <button type="button" class="danger-button" data-delete-student-document="${document.id}"
+          data-document-name="${escapeHtml(document.original_name)}">Delete</button>
+      </div>
     </article>
   `;
 }
@@ -2426,6 +2433,75 @@ function openStudentDocumentUploadDialog(studentId, documentType) {
   dialog.showModal();
 }
 
+function openStudentDocumentUpdateDialog(documentId, originalName, title) {
+  const dialog = document.createElement("dialog");
+  dialog.className = "decision-dialog document-upload-dialog";
+  dialog.innerHTML = `
+    <form method="dialog" data-update-student-document-form="${documentId}">
+      <h3>Update document</h3>
+      <p>Replace ${escapeHtml(originalName)} in this student's record. The new file will keep the same follow-up or incident link.</p>
+      <label>
+        Document name
+        <input name="title" maxlength="120" value="${escapeHtml(title)}" required>
+      </label>
+      <label>
+        Replacement file
+        <input type="file" name="document_file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" required>
+      </label>
+      <div class="decision-actions">
+        <button type="submit" class="primary-button">Save update</button>
+        <button type="button" class="quiet-button" data-close-document-upload>Cancel</button>
+        <span role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  `;
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+async function updateStudentDocument(form) {
+  const file = form.elements.document_file.files[0];
+  if (!file) return;
+  const documentId = Number(form.dataset.updateStudentDocumentForm);
+  const submitButton = form.querySelector("button[type='submit']");
+  const status = form.querySelector("[role='status']");
+  submitButton.disabled = true;
+  status.textContent = "Updating...";
+  try {
+    await api(`/api/documents/${documentId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: form.elements.title.value,
+        original_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        content_base64: await readFileAsBase64(file)
+      })
+    });
+    form.closest("dialog")?.close();
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+async function deleteStudentDocument(documentId, originalName, button) {
+  if (!window.confirm(`Delete ${originalName} from this student's record? This permanently removes the file and its entry from student history.`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/documents/${documentId}`, {
+      method: "DELETE",
+      body: JSON.stringify({})
+    });
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    button.disabled = false;
+    window.alert(error.message);
+  }
+}
+
 async function uploadStudentDocument(form) {
   const studentId = Number(form.dataset.studentDocumentUploadForm);
   const file = form.elements.document_file.files[0];
@@ -2803,6 +2879,24 @@ document.addEventListener("click", event => {
     );
   }
 
+  const updateDocumentButton = event.target.closest("[data-update-student-document]");
+  if (updateDocumentButton) {
+    openStudentDocumentUpdateDialog(
+      Number(updateDocumentButton.dataset.updateStudentDocument),
+      updateDocumentButton.dataset.documentName,
+      updateDocumentButton.dataset.documentTitle
+    );
+  }
+
+  const deleteDocumentButton = event.target.closest("[data-delete-student-document]");
+  if (deleteDocumentButton) {
+    deleteStudentDocument(
+      Number(deleteDocumentButton.dataset.deleteStudentDocument),
+      deleteDocumentButton.dataset.documentName,
+      deleteDocumentButton
+    );
+  }
+
   if (event.target.closest("[data-close-document-upload]")) {
     event.target.closest("dialog")?.close();
   }
@@ -2900,6 +2994,13 @@ document.addEventListener("submit", event => {
   if (studentDocumentUploadForm) {
     event.preventDefault();
     uploadStudentDocument(studentDocumentUploadForm);
+    return;
+  }
+
+  const studentDocumentUpdateForm = event.target.closest("[data-update-student-document-form]");
+  if (studentDocumentUpdateForm) {
+    event.preventDefault();
+    updateStudentDocument(studentDocumentUpdateForm);
     return;
   }
 

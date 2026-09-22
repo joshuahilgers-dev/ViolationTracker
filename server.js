@@ -16,7 +16,7 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const TEMPLATE_DIR = process.env.TEMPLATE_DIR || path.join(DATA_DIR, "templates");
-const DOCUMENT_DIR = path.join(DATA_DIR, "documents");
+const DOCUMENT_DIR = process.env.DOCUMENT_DIR || path.join(DATA_DIR, "documents");
 const REPAIR_PHOTO_DIR = process.env.REPAIR_PHOTO_DIR || path.join(DATA_DIR, "repair-photos");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "technology-tracker.sqlite");
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -800,6 +800,13 @@ function prepareStatements() {
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  updateDocument: prepare(`
+    UPDATE student_documents
+    SET title = ?, original_name = ?, stored_name = ?, mime_type = ?,
+        uploaded_by = ?, uploaded_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `),
+  deleteDocument: prepare("DELETE FROM student_documents WHERE id = ?"),
   adjustmentsForStatus: prepare(`
     SELECT *
     FROM step_adjustments
@@ -1293,7 +1300,7 @@ function documentView(document) {
   };
 }
 
-function sendFile(res, filePath, mimeType) {
+function sendFile(res, filePath, mimeType, cacheControl = "private, max-age=300") {
   fs.readFile(filePath, (error, data) => {
     if (error) {
       res.writeHead(404);
@@ -1301,7 +1308,7 @@ function sendFile(res, filePath, mimeType) {
     }
     res.writeHead(200, {
       "content-type": mimeType || "application/octet-stream",
-      "cache-control": "private, max-age=300"
+      "cache-control": cacheControl
     });
     res.end(data);
   });
@@ -1907,7 +1914,53 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && documentFileMatch) {
     const document = statements.getDocument.get(Number(documentFileMatch[1]));
     if (!document) return sendJson(res, 404, { error: "Document not found" });
-    return sendFile(res, path.join(DOCUMENT_DIR, document.stored_name), document.mime_type);
+    return sendFile(res, path.join(DOCUMENT_DIR, document.stored_name), document.mime_type, "private, no-store");
+  }
+
+  const documentMatch = url.pathname.match(/^\/api\/documents\/(\d+)$/);
+  if (documentMatch && ["PUT", "DELETE"].includes(req.method)) {
+    const documentId = Number(documentMatch[1]);
+    const document = statements.getDocument.get(documentId);
+    if (!document) return sendJson(res, 404, { error: "Document not found" });
+
+    if (req.method === "DELETE") {
+      fs.rmSync(path.join(DOCUMENT_DIR, document.stored_name), { force: true });
+      statements.deleteDocument.run(documentId);
+      statements.addAudit.run("document", documentId,
+        `Incorrect document removed from student ${document.student_id} by ${currentUser.email || currentUser.name || "Unknown"}.`);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const body = await readBody(req);
+    const title = required(body.title, "Document name");
+    if (title.length > 120) {
+      return sendJson(res, 400, { error: "Document name must be 120 characters or fewer." });
+    }
+    const originalName = required(body.original_name, "File name");
+    if (originalName.length > 255 || !STUDENT_DOCUMENT_EXTENSIONS.has(path.extname(originalName).toLowerCase())) {
+      return sendJson(res, 400, { error: "Upload a PDF, Word document, PNG, or JPEG file with a valid name." });
+    }
+    const bytes = Buffer.from(required(body.content_base64, "File content"), "base64");
+    if (!bytes.length || bytes.length > 10_000_000) {
+      return sendJson(res, 400, { error: "Document must be nonempty and 10 MB or smaller." });
+    }
+    const storedName = safeStudentDocumentFileName(document.student_id, originalName);
+    fs.writeFileSync(path.join(DOCUMENT_DIR, storedName), bytes);
+    try {
+      statements.updateDocument.run(
+        title, originalName, storedName,
+        nullable(body.mime_type) || "application/octet-stream",
+        currentUser.email || currentUser.name || null,
+        documentId
+      );
+    } catch (error) {
+      fs.rmSync(path.join(DOCUMENT_DIR, storedName), { force: true });
+      throw error;
+    }
+    fs.rmSync(path.join(DOCUMENT_DIR, document.stored_name), { force: true });
+    statements.addAudit.run("document", documentId,
+      `Document corrected for student ${document.student_id} by ${currentUser.email || currentUser.name || "Unknown"}.`);
+    return sendJson(res, 200, documentView(statements.getDocument.get(documentId)));
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {

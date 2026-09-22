@@ -5,6 +5,7 @@
   "description": "Local school technology violation tracking app",
   "scripts": {
     "build": "node scripts/build-check.js",
+    "test:documents": "node scripts/test-student-documents.js",
     "test:policy": "node scripts/test-responsible-use-policy.js",
     "start": "node server.js",
     "dev": "node --watch server.js"

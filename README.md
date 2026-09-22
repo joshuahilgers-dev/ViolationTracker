@@ -208,6 +208,12 @@ The app stores data in `data/technology-tracker.sqlite`. This is a real SQL data
 - Replacing or removing the policy affects future Parent PDFs only. The internal **Full History PDF** is never given the policy attachment.
 - Policy uploads must be valid, unencrypted PDFs no larger than 10 MB and are stored locally in `data/templates`.
 
+## Correcting Student Documents
+
+- In a student's **Stored Documents** section, use **Update** to replace an incorrect file while keeping its incident or follow-up link. You can correct the document name at the same time.
+- Use **Delete** to permanently remove an incorrect upload after confirmation. It disappears from the student record, linked incident or follow-up, and future Full History PDFs. The incident or follow-up itself stays in place.
+- Updates and deletions leave a minimal internal audit record, but do not add a correction entry to student history. Previously downloaded PDFs and backups cannot be changed retroactively.
+
 ## Chromebook Repair And Fine Workflow
 
 - Start a repair or fine by finding a student by name or scanning their student ID.
