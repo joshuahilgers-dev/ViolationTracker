@@ -825,6 +825,11 @@ function prepareStatements() {
     VALUES (?, ?, ?, ?, ?)
   `),
   getStepAdjustment: prepare("SELECT * FROM step_adjustments WHERE id = ?"),
+  updateStepAdjustmentNotes: prepare("UPDATE step_adjustments SET reason = ? WHERE id = ?"),
+  updateSupersededAdjustmentNotes: prepare(`
+    UPDATE step_adjustments SET ended_reason = ?
+    WHERE student_id = ? AND ended_reason = ?
+  `),
   endActiveStepAdjustments: prepare(`
     UPDATE step_adjustments
     SET ended_at = CURRENT_TIMESTAMP, ended_by = ?, ended_reason = ?
@@ -2310,6 +2315,27 @@ async function handleApi(req, res, url) {
   }
 
   const stepAdjustmentActionMatch = url.pathname.match(/^\/api\/step-adjustments\/(\d+)(?:\/(end))?$/);
+  if (req.method === "PATCH" && stepAdjustmentActionMatch && !stepAdjustmentActionMatch[2]) {
+    const adjustmentId = Number(stepAdjustmentActionMatch[1]);
+    const adjustment = statements.getStepAdjustment.get(adjustmentId);
+    if (!adjustment) return sendJson(res, 404, { error: "Step adjustment not found" });
+    const body = await readBody(req);
+    const notes = required(body.notes, "Notes");
+    if (notes !== adjustment.reason) {
+      statements.updateStepAdjustmentNotes.run(notes, adjustmentId);
+      statements.updateSupersededAdjustmentNotes.run(
+        `Superseded by adjustment #${adjustmentId}: ${notes}`,
+        adjustment.student_id,
+        `Superseded by adjustment #${adjustmentId}: ${adjustment.reason}`
+      );
+      statements.addAudit.run(
+        "step_adjustment",
+        adjustmentId,
+        `Notes edited by ${currentUser.email}. Previous: ${JSON.stringify(adjustment.reason)}. Updated: ${JSON.stringify(notes)}.`
+      );
+    }
+    return sendJson(res, 200, { ok: true, notes });
+  }
   if (req.method === "POST" && stepAdjustmentActionMatch && stepAdjustmentActionMatch[2] === "end") {
     const adjustmentId = Number(stepAdjustmentActionMatch[1]);
     const adjustment = statements.getStepAdjustment.get(adjustmentId);

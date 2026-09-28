@@ -1556,12 +1556,15 @@ function adjustmentRows(adjustments, allowManagement = false) {
       <div class="incident-heading">
         <h4>${escapeHtml(formatLongDate(adjustment.created_at))} <span aria-hidden="true">\u00b7</span> Moved to ${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}</h4>
         ${allowManagement ? `
-          <details class="record-actions-menu incident-actions-menu">
-            <summary class="quiet-button compact-button">More</summary>
-            <div class="record-actions-popover">
-              <button class="danger-button compact-button" data-delete-step-adjustment="${adjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}">Delete accidental adjustment</button>
-            </div>
-          </details>
+          <div class="row-actions incident-row-actions">
+            <button class="quiet-button compact-button" data-edit-step-adjustment-notes="${adjustment.id}" data-adjustment-notes="${encodeURIComponent(String(adjustment.reason || ""))}">Edit notes</button>
+            <details class="record-actions-menu incident-actions-menu">
+              <summary class="quiet-button compact-button">More</summary>
+              <div class="record-actions-popover">
+                <button class="danger-button compact-button" data-delete-step-adjustment="${adjustment.id}" data-adjustment-label="${escapeHtml(statusLabels[adjustment.target_step] || adjustment.target_step)}">Delete accidental adjustment</button>
+              </div>
+            </details>
+          </div>
         ` : ""}
       </div>
       <div class="meta">
@@ -2153,13 +2156,12 @@ async function completeAction(id) {
   }
 }
 
-function editIncidentNotes(id, currentNotes, entryType = "violation") {
+function editRecordNotes({ title, path, currentNotes }) {
   const dialog = document.createElement("dialog");
-  const entryLabel = entryType === "warning" ? "warning" : "violation";
   dialog.className = "decision-dialog incident-notes-dialog";
   dialog.innerHTML = `
     <form>
-      <h3>Edit ${entryLabel} notes</h3>
+      <h3>${escapeHtml(title)}</h3>
       <label>
         Notes
         <textarea name="notes" rows="8" required>${escapeHtml(currentNotes)}</textarea>
@@ -2198,7 +2200,7 @@ function editIncidentNotes(id, currentNotes, entryType = "violation") {
     submitButton.disabled = true;
     status.textContent = "Saving...";
     try {
-      await api(`/api/incidents/${id}`, {
+      await api(path, {
         method: "PATCH",
         body: JSON.stringify({ notes })
       });
@@ -2844,11 +2846,11 @@ document.addEventListener("click", event => {
 
   const editIncidentNotesButton = event.target.closest("[data-edit-incident-notes]");
   if (editIncidentNotesButton) {
-    editIncidentNotes(
-      Number(editIncidentNotesButton.dataset.editIncidentNotes),
-      decodeURIComponent(editIncidentNotesButton.dataset.incidentNotes || ""),
-      editIncidentNotesButton.dataset.entryType
-    );
+    editRecordNotes({
+      title: `Edit ${editIncidentNotesButton.dataset.entryType === "warning" ? "warning" : "violation"} notes`,
+      path: `/api/incidents/${Number(editIncidentNotesButton.dataset.editIncidentNotes)}`,
+      currentNotes: decodeURIComponent(editIncidentNotesButton.dataset.incidentNotes || "")
+    });
   }
 
   const convertIncidentButton = event.target.closest("[data-convert-incident]");
@@ -2911,6 +2913,14 @@ document.addEventListener("click", event => {
   }
 
   const deleteStepAdjustmentButton = event.target.closest("[data-delete-step-adjustment]");
+  const editStepAdjustmentNotesButton = event.target.closest("[data-edit-step-adjustment-notes]");
+  if (editStepAdjustmentNotesButton) {
+    editRecordNotes({
+      title: "Edit step adjustment notes",
+      path: `/api/step-adjustments/${Number(editStepAdjustmentNotesButton.dataset.editStepAdjustmentNotes)}`,
+      currentNotes: decodeURIComponent(editStepAdjustmentNotesButton.dataset.adjustmentNotes || "")
+    });
+  }
   if (deleteStepAdjustmentButton) {
     deleteStepAdjustment(
       Number(deleteStepAdjustmentButton.dataset.deleteStepAdjustment),
