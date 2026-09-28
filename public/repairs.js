@@ -9,8 +9,15 @@ const repairState = {
   partUsage: [],
   feeSchedule: [],
   fineDeviceTypes: [],
-  expandedStudents: new Set()
+  expandedStudents: new Set(),
+  tableGroups: new Map()
 };
+
+let repairQuickPreview;
+let repairPreviewTrigger;
+let repairPreviewPinned = false;
+let repairPreviewCloseTimer;
+let repairPreviewRestoringFocus = false;
 
 const MAX_REPAIR_PHOTO_BYTES = 2 * 1024 * 1024;
 const REPAIR_PHOTO_TARGET_BYTES = Math.floor(1.9 * 1024 * 1024);
@@ -144,6 +151,7 @@ function renderRepairWorkspace() {
 }
 
 function renderRepairTable() {
+  closeRepairQuickPreview();
   const query = repairEls.search.value.trim().toLowerCase();
   const status = repairEls.statusFilter.value;
   const records = repairState.repairs.filter(repair => {
@@ -162,6 +170,7 @@ function renderRepairTable() {
     groups.get(studentId).push(record);
   }
   const grouped = [...groups.values()];
+  repairState.tableGroups = groups;
   repairEls.historyCount.textContent = `${grouped.length} student${grouped.length === 1 ? "" : "s"} · ${records.length} of ${repairState.repairs.length} records shown.`;
   repairEls.empty.hidden = grouped.length > 0;
   repairEls.tableBody.innerHTML = grouped.map(group => repairStudentRows(group)).join("");
@@ -182,6 +191,96 @@ function repairCareLabel(record) {
   if (record.chromecare_status === "Yes") return "Chromebook Care purchased";
   if (record.chromecare_status === "No") return "No Chromebook Care";
   return "Chromebook Care not confirmed";
+}
+
+function repairPreviewCell(group, kind) {
+  const studentId = Number(group[0].student_id);
+  const records = kind === "notes" ? group.filter(record => String(record.incident_notes || "").trim()) : group;
+  if (!records.length) return `<span class="repair-cell-meta">No notes</span>`;
+  const text = kind === "notes" ? records[0].incident_notes : repairRecordLabel(records[0]);
+  const label = kind === "notes"
+    ? (records.length > 1 ? `${records.length} records with notes` : "Read notes")
+    : (records.length > 1 ? `+${records.length - 1} more` : "Quick view");
+  return `
+    <button type="button" class="repair-summary-trigger" data-repair-preview="${kind}" data-preview-student="${studentId}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(`${kind === "notes" ? "Read notes" : "Show repairs and fines"} for ${repairStudentName(group[0])}`)}">
+      <span class="repair-summary-text ${kind === "notes" ? "repair-notes-snippet" : ""}">${escapeHtml(text)}</span>
+      <span class="repair-preview-link">${escapeHtml(label)}</span>
+    </button>`;
+}
+
+function closeRepairQuickPreview({ restoreFocus = false } = {}) {
+  clearTimeout(repairPreviewCloseTimer);
+  const trigger = repairPreviewTrigger;
+  if (repairQuickPreview) repairQuickPreview.hidden = true;
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  repairPreviewTrigger = null;
+  repairPreviewPinned = false;
+  if (restoreFocus && trigger?.isConnected) {
+    repairPreviewRestoringFocus = true;
+    trigger.focus();
+    repairPreviewRestoringFocus = false;
+  }
+}
+
+function scheduleRepairPreviewClose() {
+  clearTimeout(repairPreviewCloseTimer);
+  if (!repairPreviewPinned) {
+    repairPreviewCloseTimer = setTimeout(() => {
+      if (!repairPreviewTrigger?.contains(document.activeElement) && !repairQuickPreview?.contains(document.activeElement)) closeRepairQuickPreview();
+    }, 200);
+  }
+}
+
+function showRepairQuickPreview(trigger, { pin = false } = {}) {
+  clearTimeout(repairPreviewCloseTimer);
+  if (repairPreviewPinned && !pin) return;
+  if (repairPreviewTrigger === trigger && repairQuickPreview && !repairQuickPreview.hidden) {
+    if (pin) {
+      repairPreviewPinned = true;
+      repairQuickPreview.querySelector("[data-close-repair-preview]").focus();
+    }
+    return;
+  }
+  const group = repairState.tableGroups.get(Number(trigger.dataset.previewStudent));
+  if (!group?.length) return;
+  closeRepairQuickPreview();
+  const notes = trigger.dataset.repairPreview === "notes";
+  const records = notes ? group.filter(record => String(record.incident_notes || "").trim()) : group;
+  if (!repairQuickPreview) {
+    repairQuickPreview = document.createElement("div");
+    repairQuickPreview.className = "repair-quick-preview";
+    repairQuickPreview.setAttribute("role", "dialog");
+    repairQuickPreview.setAttribute("aria-labelledby", "repair-preview-title");
+    repairQuickPreview.addEventListener("pointerenter", () => clearTimeout(repairPreviewCloseTimer));
+    repairQuickPreview.addEventListener("pointerleave", scheduleRepairPreviewClose);
+    document.body.append(repairQuickPreview);
+  }
+  repairQuickPreview.innerHTML = `
+    <div class="repair-preview-heading">
+      <div><h3 id="repair-preview-title">${notes ? "Notes" : "Repairs and fines"}</h3><span class="repair-cell-meta">${escapeHtml(repairStudentName(group[0]))}</span></div>
+      <button type="button" class="quiet-button compact-button" data-close-repair-preview aria-label="Close preview">Close</button>
+    </div>
+    <div class="repair-preview-records">
+      ${records.map(record => `
+        <article class="repair-preview-record">
+          <div class="repair-preview-record-meta"><span class="repair-kind-badge ${repairRecordKind(record).toLowerCase()}">${repairRecordKind(record)}</span><span>${escapeHtml(repairFormatDate(record.created_at))}</span>${Number(record.damage_fee) ? `<strong>${escapeHtml(repairFormatMoney(record.fee_amount_cents))}</strong>` : ""}</div>
+          <strong>${escapeHtml(repairRecordLabel(record))}</strong>
+          ${notes ? `<p>${escapeHtml(record.incident_notes)}</p>` : `<span class="repair-cell-meta">${escapeHtml(repairRecordKind(record) === "Repair" ? record.status : "Fine")} · Asset ${escapeHtml(record.asset_tag || "unassigned")}</span>`}
+        </article>`).join("")}
+    </div>`;
+  repairPreviewTrigger = trigger;
+  repairPreviewPinned = pin;
+  trigger.setAttribute("aria-expanded", "true");
+  repairQuickPreview.hidden = false;
+  const rect = trigger.getBoundingClientRect();
+  const previewRect = repairQuickPreview.getBoundingClientRect();
+  const left = Math.max(16, Math.min(rect.left, window.innerWidth - previewRect.width - 16));
+  const top = rect.bottom + 8 + previewRect.height <= window.innerHeight - 16
+    ? rect.bottom + 8
+    : Math.max(16, rect.top - previewRect.height - 8);
+  repairQuickPreview.style.left = `${left}px`;
+  repairQuickPreview.style.top = `${top}px`;
+  if (pin) repairQuickPreview.querySelector("[data-close-repair-preview]").focus();
 }
 
 function repairStudentRows(group) {
@@ -215,6 +314,7 @@ function repairStudentRows(group) {
         ${assets.slice(0, 2).map(asset => `<span class="asset-tag">${escapeHtml(asset)}</span>`).join(" ")}
       </td>
       <td><strong>${escapeHtml(activity)}</strong></td>
+      <td class="repair-issue-cell">${repairPreviewCell(group, "issues")}</td>
       <td>${escapeHtml(repairFormatDate(latest.created_at))}</td>
       <td>${openCount ? `<span class="repair-status open">${openCount} open</span>` : `<span class="repair-cell-meta">None</span>`}</td>
       <td>
@@ -223,10 +323,11 @@ function repairStudentRows(group) {
         ${needsNotice ? `<span class="workflow-state needs-action">${needsNotice} need${needsNotice === 1 ? "s" : ""} ParentSquare notice</span>` : assessmentRecords.length ? `<span class="workflow-state complete">ParentSquare complete</span>` : ""}
         ${needsSkyward ? `<span class="workflow-state needs-action">${needsSkyward} need${needsSkyward === 1 ? "s" : ""} Skyward entry</span>` : skywardApplicable.length ? `<span class="workflow-state complete">Skyward complete</span>` : assessmentRecords.length ? `<span class="workflow-state complete">No Skyward charge</span>` : ""}
       </td>
+      <td class="repair-notes-cell">${repairPreviewCell(group, "notes")}</td>
       <td><button class="quiet-button compact-button" type="button" data-repair-student-toggle="${studentId}" aria-expanded="${expanded}">${expanded ? "Hide" : "View"}</button></td>
     </tr>
     <tr class="repair-student-details-row" id="repair-student-details-${studentId}" ${expanded ? "" : "hidden"}>
-      <td colspan="6"><div class="repair-record-list">${group.map(repairRecordCard).join("")}</div></td>
+      <td colspan="8"><div class="repair-record-list">${group.map(repairRecordCard).join("")}</div></td>
     </tr>`;
 }
 
@@ -892,6 +993,18 @@ repairEls.chromecareStatus.addEventListener("change", updateSuggestedRepairFee);
 repairEls.feeScheduleSettings.addEventListener("submit", saveFeeSchedule);
 
 document.addEventListener("click", event => {
+  const previewButton = event.target.closest("[data-repair-preview]");
+  if (previewButton) {
+    if (repairPreviewPinned && repairPreviewTrigger === previewButton) closeRepairQuickPreview();
+    else showRepairQuickPreview(previewButton, { pin: true });
+    return;
+  }
+  if (event.target.closest("[data-close-repair-preview]")) {
+    closeRepairQuickPreview({ restoreFocus: true });
+    return;
+  }
+  if (repairQuickPreview?.contains(event.target)) return;
+  closeRepairQuickPreview();
   if (event.target.closest("[data-close-repair-dialog]")) repairEls.dialog.close();
   if (event.target.closest("[data-close-repair-notice]")) repairEls.noticeDialog.close();
   const groupToggle = event.target.closest("[data-repair-student-toggle]");
@@ -918,6 +1031,42 @@ document.addEventListener("click", event => {
   const settingsButton = event.target.closest('[data-view="settings"]');
   if (settingsButton && !repairState.loaded) loadRepairWorkspace({ quiet: true });
 });
+
+document.addEventListener("pointerover", event => {
+  const trigger = event.target.closest("[data-repair-preview]");
+  if (trigger && event.pointerType !== "touch") showRepairQuickPreview(trigger);
+});
+
+document.addEventListener("pointerout", event => {
+  const trigger = event.target.closest("[data-repair-preview]");
+  if (trigger && !trigger.contains(event.relatedTarget)) scheduleRepairPreviewClose();
+});
+
+document.addEventListener("focusin", event => {
+  const trigger = event.target.closest("[data-repair-preview]");
+  if (trigger && !repairPreviewRestoringFocus) showRepairQuickPreview(trigger);
+  if (repairQuickPreview?.contains(event.target)) clearTimeout(repairPreviewCloseTimer);
+});
+
+document.addEventListener("focusout", event => {
+  if (repairPreviewTrigger?.contains(event.target) || repairQuickPreview?.contains(event.target)) {
+    if (!repairPreviewTrigger?.contains(event.relatedTarget) && !repairQuickPreview?.contains(event.relatedTarget)) {
+      if (!repairPreviewPinned) scheduleRepairPreviewClose();
+    }
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && repairPreviewTrigger) {
+    event.preventDefault();
+    closeRepairQuickPreview({ restoreFocus: repairPreviewPinned });
+  }
+});
+
+window.addEventListener("resize", () => closeRepairQuickPreview());
+document.addEventListener("scroll", event => {
+  if (!repairQuickPreview?.contains(event.target)) closeRepairQuickPreview();
+}, true);
 
 document.addEventListener("change", event => {
   const photoInput = event.target.closest("[data-repair-photo-input]");
