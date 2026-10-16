@@ -1356,6 +1356,7 @@ textarea {
 
 .entry-type-field {
   grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .entry-type-field label {
@@ -2665,4 +2666,7 @@ textarea {
 .restriction-group { margin-bottom: 18px; }
 .restriction-dialog { width: min(640px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; }
 .restriction-dialog::backdrop { background: #0f172a66; }
+.settings-support-column { display: grid; gap: 18px; min-width: 0; }
+.restriction-settings .form-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 620px) { .entry-type-field { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .restriction-fields { grid-template-columns: 1fr; } }

@@ -103,7 +103,7 @@ function renderRestrictionSettings() {
   let panel = document.querySelector("#restriction-settings");
   if (!panel) {
     panel = document.createElement("section"); panel.id = "restriction-settings"; panel.className = "panel restriction-settings";
-    document.querySelector("#infraction-settings").closest("section").after(panel);
+    document.querySelector("#settings-support-column").append(panel);
   }
   if (state.currentUser?.role !== "tech_admin") { panel.hidden = true; return; }
   panel.hidden = false;
