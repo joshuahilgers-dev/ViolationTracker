@@ -255,6 +255,8 @@ async function loadBootstrap() {
   state.notificationSettings = data.notificationSettings;
   state.students = data.students;
   state.infractionTypes = data.infractionTypes;
+  state.restrictionTypes = data.restrictionTypes || [];
+  state.restrictions = data.restrictions || [];
   state.templates = data.templates || [];
   state.openActions = data.openActions;
   state.incidentStudentHistory = null;
@@ -267,6 +269,7 @@ async function loadTeacherDashboard() {
   const data = await api("/api/teacher-dashboard");
   state.currentTerm = data.currentTerm;
   state.teacherStudents = data.students || [];
+  state.restrictions = data.restrictions || [];
   renderTeacherDashboard();
 }
 
@@ -278,6 +281,7 @@ function populateReporterEmail() {
 }
 
 function renderAll() {
+  renderRestrictionWorkspace();
   renderMetrics();
   renderStudentOptions();
   renderInfractionOptions();
@@ -452,6 +456,7 @@ function teacherDeviceRestrictionSection(activeStudents, satisfiedStudents, open
 }
 
 function renderTeacherDashboard() {
+  renderTeacherRestrictions();
   const query = (els.teacherStudentSearch.value || "").trim().toLowerCase();
   const selectedGrades = new Set([...els.teacherGradeFilters]
     .filter(input => input.checked)
@@ -550,7 +555,7 @@ async function showTeacherStudentDetail(studentId) {
             </article>`;
         }).join("")
       : `<div class="empty">No active warnings or violations are recorded for this term.</div>`;
-    els.teacherDialogContent.innerHTML = `${restrictionNotice}${checkInNotice}${incidentHistory}`;
+    els.teacherDialogContent.innerHTML = `${restrictionNotice}${checkInNotice}${(data.restrictions || []).map(item => restrictionCard(item, false)).join("")}${incidentHistory}`;
   } catch (error) {
     els.teacherDialogSubtitle.textContent = "Unable to load details";
     els.teacherDialogContent.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -1681,6 +1686,8 @@ async function showStudentDetail(id) {
         ${openActions.length ? openActions.map(actionCard).join("") : `<div class="empty compact-empty positive-empty"><span aria-hidden="true">\u2713</span> No open follow-ups for this student.</div>`}
       </div>
     `}
+    <h4 class="section-title">Restrictions</h4>
+    <div class="timeline">${(student.restrictions || []).map(item => restrictionCard(item, !isArchived)).join("") || '<div class="empty">No restrictions recorded.</div>'}</div>
     ${profileDocumentControls(student, isArchived)}
     <div class="document-library">
       ${documents.length ? documents.map(profileDocumentCard).join("") : `<div class="empty compact-empty">No documents uploaded yet.</div>`}
@@ -2042,7 +2049,9 @@ async function createIncident(event) {
     renderInfractionOptions();
     updateIncidentEntryTypeUi();
     await loadBootstrap();
-    els.incidentMessage.textContent = result.entry_type === "warning"
+    els.incidentMessage.textContent = result.entry_type === "restriction"
+      ? "Restriction saved. It does not count toward intervention steps."
+      : result.entry_type === "warning"
       ? "Warning saved. It is documented in history and does not count toward the intervention step."
       : "Violation saved. The student's intervention step has been updated.";
     setTimeout(() => { els.incidentMessage.textContent = ""; }, 4000);
@@ -2091,6 +2100,11 @@ function repeatWarningDecision(details) {
 }
 
 async function saveIncidentWithRepeatWarningPrompt(payload) {
+  if (payload.entry_type === "restriction") return api("/api/restrictions", {
+    method: "POST", body: JSON.stringify({ student_id: payload.student_id,
+      restriction_type_id: payload.restriction_type_id, starts_on: payload.occurred_on,
+      ends_on: payload.ends_on, notes: payload.notes })
+  });
   try {
     return await api("/api/incidents", {
       method: "POST",
@@ -2116,6 +2130,7 @@ function updateIncidentEntryTypeUi() {
   const entryType = els.incidentForm.elements.entry_type.value;
   const submitButton = els.incidentForm.querySelector("button[type='submit']");
   submitButton.textContent = entryType === "warning" ? "Save warning" : "Save violation";
+  updateRestrictionForm(entryType);
 }
 
 async function completeAction(id) {

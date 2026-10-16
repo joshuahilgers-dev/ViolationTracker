@@ -10,6 +10,7 @@ const nodemailer = require("nodemailer");
 const { createStudentHistoryPdf, historyFilename } = require("./student-history-pdf.cjs");
 const { appendPdf, inspectPdf } = require("./pdf-attachments.cjs");
 const { createChromebookRepairs } = require("./chromebook-repairs.cjs");
+const { createRestrictions } = require("./restrictions.cjs");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
@@ -74,6 +75,7 @@ fs.mkdirSync(DOCUMENT_DIR, { recursive: true });
 let db;
 let statements;
 let chromebookRepairs;
+let restrictions;
 
 function persistDb() {
   fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
@@ -1801,7 +1803,12 @@ async function handleApi(req, res, url) {
       .all(term.id, "", "%%")
       .map(toTeacherStudentView)
       .filter(student => student.status.key !== "no_violations");
-    return sendJson(res, 200, { currentTerm: term, students });
+    return sendJson(res, 200, { currentTerm: term, students,
+      restrictions: restrictions.list().filter(item => item.state === "active").map(item => ({
+        id: item.id, student_id: item.student_id, restriction_type_id: item.restriction_type_id,
+        label: item.label, starts_on: item.starts_on, ends_on: item.ends_on, notes: item.notes,
+        first_name: item.first_name, last_name: item.last_name, grade: item.grade, state: item.state
+      })) });
   }
 
   const teacherStudentMatch = url.pathname.match(/^\/api\/teacher-dashboard\/students\/(\d+)$/);
@@ -1839,6 +1846,9 @@ async function handleApi(req, res, url) {
         success_contract_supervision_state: contractSupervision.success_contract_supervision_state
       },
       currentTerm: term,
+      restrictions: restrictions.forStudent(student.id).filter(item => item.state === "active").map(item => ({
+        label: item.label, starts_on: item.starts_on, ends_on: item.ends_on, notes: item.notes, state: item.state
+      })),
       incidents
     });
   }
@@ -1895,6 +1905,8 @@ async function handleApi(req, res, url) {
   }
 
   requireTechAccess(currentUser);
+
+  if (await restrictions.handleApi(req, res, url, currentUser)) return;
 
   if (await chromebookRepairs.handleApi(req, res, url, currentUser)) return;
 
@@ -1982,6 +1994,8 @@ async function handleApi(req, res, url) {
       },
       students,
       infractionTypes: statements.listInfractions.all(),
+      restrictionTypes: restrictions.types(),
+      restrictions: restrictions.list(),
       templates,
       openActions: statements.openActions.all().map(action => ({
         ...action,
@@ -2153,6 +2167,7 @@ async function handleApi(req, res, url) {
     const history = {
       ...student,
       counts,
+      restrictions: restrictions.forStudent(id),
       status: statusForStudent(id),
       automaticStatus: automaticStatusForStudent(id),
       activeAdjustment: activeAdjustmentForStudent(id),
@@ -2852,6 +2867,9 @@ async function main() {
   execSql("PRAGMA foreign_keys = ON;");
   migrate();
   statements = prepareStatements();
+  restrictions = createRestrictions({ prepare, execSql, localDateText, readBody, sendJson, requireTechAdmin,
+    audit: (type, id, message) => statements.addAudit.run(type, id, message) });
+  restrictions.migrate();
   ensureCurrentSuccessContractCheckInActions();
   chromebookRepairs = createChromebookRepairs({
     getDb: () => db,

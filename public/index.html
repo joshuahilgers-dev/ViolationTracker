@@ -58,7 +58,7 @@
         <nav class="nav" aria-label="Main">
           <button class="nav-button" data-view="teacher-dashboard" data-teacher-nav hidden>Student Status</button>
           <button class="nav-button active" data-view="dashboard" data-tech-nav>Dashboard</button>
-          <button class="nav-button" data-view="new-incident" data-tech-nav>New Tech Violation</button>
+          <button class="nav-button" data-view="new-incident" data-tech-nav>Add Technology Record</button>
           <button class="nav-button" data-view="students" data-tech-nav>Students</button>
           <button class="nav-button" data-view="actions" data-tech-nav>Action Queue</button>
           <button class="nav-button" data-view="settings" data-admin-nav>Settings</button>
@@ -70,7 +70,7 @@
           <div class="page-heading teacher-heading">
             <div>
               <h2>Student Technology Status</h2>
-              <p>Read-only view of students with a current warning or technology intervention step.</p>
+              <p>Read-only view of technology interventions and active access restrictions.</p>
             </div>
             <span class="read-only-badge">Read only</span>
           </div>
@@ -85,7 +85,12 @@
             </fieldset>
             <span id="teacher-term-label" class="panel-note"></span>
           </section>
+          <div class="restriction-tabs" role="group" aria-label="Student status dashboards">
+            <button type="button" class="primary-button" data-teacher-section="violations" aria-pressed="true">Violation Dashboard</button>
+            <button type="button" class="quiet-button" data-teacher-section="restrictions" aria-pressed="false">Restrictions</button>
+          </div>
           <div id="teacher-status-groups" class="teacher-status-groups" aria-live="polite"></div>
+          <div id="teacher-restrictions" aria-live="polite" hidden></div>
           <dialog id="teacher-student-dialog" class="teacher-student-dialog" aria-labelledby="teacher-dialog-title">
             <div class="teacher-dialog-header">
               <div>
@@ -104,7 +109,7 @@
               <h2>Dashboard</h2>
               <p id="dashboard-subtitle">Current students, interventions, and open follow-ups.</p>
             </div>
-            <button class="primary-button" data-open-view="new-incident">Add Tech Violation</button>
+            <button class="primary-button" data-open-view="new-incident">Add Technology Record</button>
           </div>
           <div class="metric-grid">
             <div class="metric">
@@ -140,11 +145,15 @@
           </div>
         </section>
 
+        <section class="view" id="restrictions-view">
+          <div class="page-heading"><div><h2>Restrictions</h2><p>Access and usage restrictions, separate from intervention steps.</p></div><button class="quiet-button" data-open-view="dashboard">Back to dashboard</button></div>
+          <section class="panel"><label>Restriction type<select id="restriction-filter"></select></label><div id="restriction-management" aria-live="polite"></div></section>
+        </section>
         <section class="view" id="new-incident-view">
           <div class="page-heading">
             <div>
-              <h2>New Tech Violation</h2>
-              <p>Record a violation that counts toward intervention steps or document a non-counting warning.</p>
+              <h2>Add Technology Record</h2>
+              <p>Record a violation, document a warning, or assign an access restriction.</p>
             </div>
           </div>
           <form id="incident-form" class="form-grid panel">
@@ -195,6 +204,10 @@
               <label>
                 <input type="radio" name="entry_type" value="warning">
                 <span><strong>Warning</strong><small>Documented in history but does not count</small></span>
+              </label>
+              <label>
+                <input type="radio" name="entry_type" value="restriction">
+                <span><strong>Restrictions</strong><small>Access or usage restrictions; no severity or intervention count</small></span>
               </label>
             </fieldset>
             <fieldset class="segmented-field">
@@ -707,6 +720,7 @@
       </form>
     </dialog>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="/restrictions.js" defer></script>
     <script src="/app.js" defer></script>
     <script src="/repairs.js" defer></script>
   </body>

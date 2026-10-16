@@ -4,6 +4,20 @@ The local project is `C:\Users\hilgersjw\Documents\TechViolations`.
 Its GitHub repository is https://github.com/joshuahilgers-dev/ViolationTracker and its deployment branch is `main`.
 The school server's installation folder must be confirmed on the server; it may differ from the local path.
 
+## October 16, 2026: Additional access restrictions
+
+- **Add Technology Record** offers Violation, Warning, and Restrictions. Restrictions have an effective date, optional inclusive end date, and notes visible to teachers, with no severity or intervention count.
+- Tech Admin manages **Restriction Types** in Settings. The initial choices are No Email Access and Teacher/Admin Email Access Only. Retiring or renaming a type preserves existing assignments and history.
+- Teachers can switch between **Violation Dashboard** and **Restrictions**. Active restrictions are grouped by type and use the existing name search and grade filters. Restrictions-only students are included.
+- Tech Staff/Admin have a separate Restrictions row below Students By Current Step, with a unique-student total and counts by type. Click a count to manage assignments.
+- Assignment controls distinguish **Edit**, **End restriction**, and **Remove incorrect entry**. Ending/removing requires a reason; records and audit history are preserved. Ended/expired entries are read-only except for marking an incorrect entry as removed.
+- Scheduled restrictions appear in staff management but become visible to teachers only on their effective date. End dates are inclusive. Restrictions persist across term changes. Overlapping assignments of the same type for one student are rejected.
+- This records restrictions; it does not change Google Admin or other external account settings. Restriction history is available in the student profile and management list; existing incident PDF exports are unchanged.
+
+The server automatically adds `restriction_types` and `student_restrictions` tables on startup. Back up the existing database before deployment. Ship `restrictions.cjs` and `public/restrictions.js` with the updated server and frontend, restart the confirmed tracker service, and hard-refresh browsers. No new dependency is required.
+
+Run `npm run build` and `npm run test:restrictions` before deployment. The integration test uses a temporary database and synthetic students, checking dates, duplicates, history, roles, term rollover, retirement, and restart.
+
 ## September 9, 2026 update
 
 - Navigation and quick action say **New Tech Violation** and **Add Tech Violation**.

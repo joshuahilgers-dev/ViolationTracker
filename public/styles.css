@@ -2656,3 +2656,13 @@ textarea {
     grid-column: auto;
   }
 }
+/* Additional access restrictions are independent of intervention steps. */
+.restriction-tabs, .restriction-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.restriction-dashboard-row { margin-top: 24px; }
+.restriction-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.restriction-card { border: 1px solid var(--border, #cbd5e1); border-radius: 10px; padding: 16px; margin: 12px 0; }
+.restriction-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+.restriction-group { margin-bottom: 18px; }
+.restriction-dialog { width: min(640px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; }
+.restriction-dialog::backdrop { background: #0f172a66; }
+@media (max-width: 640px) { .restriction-fields { grid-template-columns: 1fr; } }

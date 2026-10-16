@@ -5,6 +5,8 @@ const path = require("node:path");
 const root = path.join(__dirname, "..");
 const requiredFiles = [
   "server.js",
+  "restrictions.cjs",
+  "public/restrictions.js",
   "chromebook-repairs.cjs",
   "pdf-attachments.cjs",
   "student-history-pdf.cjs",
@@ -22,7 +24,7 @@ for (const file of requiredFiles) {
   }
 }
 
-for (const file of ["server.js", "chromebook-repairs.cjs", "pdf-attachments.cjs", "student-history-pdf.cjs", "public/app.js", "public/repairs.js"]) {
+for (const file of ["server.js", "restrictions.cjs", "public/restrictions.js", "chromebook-repairs.cjs", "pdf-attachments.cjs", "student-history-pdf.cjs", "public/app.js", "public/repairs.js"]) {
   const result = spawnSync(process.execPath, ["--check", path.join(root, file)], {
     stdio: "inherit"
   });
