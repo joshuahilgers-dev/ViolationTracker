@@ -409,6 +409,7 @@ function migrate() {
   ensureColumn("step_adjustments", "ended_at", "TEXT");
   ensureColumn("step_adjustments", "ended_by", "TEXT");
   ensureColumn("step_adjustments", "ended_reason", "TEXT");
+  ensureColumn("step_adjustments", "baseline_incident_id", "INTEGER");
   ensureCurrentTerm();
   syncInfractionTypes();
   syncSeedStaffUsers();
@@ -823,8 +824,8 @@ function prepareStatements() {
     ORDER BY a.created_at DESC, a.id DESC
   `),
   insertStepAdjustment: prepare(`
-    INSERT INTO step_adjustments (student_id, term_id, target_step, reason, adjusted_by)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO step_adjustments (student_id, term_id, target_step, reason, adjusted_by, baseline_incident_id)
+    VALUES (?, ?, ?, ?, ?, ?)
   `),
   getStepAdjustment: prepare("SELECT * FROM step_adjustments WHERE id = ?"),
   updateStepAdjustmentNotes: prepare("UPDATE step_adjustments SET reason = ? WHERE id = ?"),
@@ -930,9 +931,9 @@ const WORKFLOW_ACTION_LEVELS = {
   parent_contact_admin: 5
 };
 
-function statusFromIncidentHistory(incidents) {
-  let key = "no_violations";
-  let minorCount = 0;
+function statusFromIncidentHistory(incidents, initialKey = "no_violations") {
+  let key = initialKey;
+  let minorCount = initialKey === "monitor" ? 1 : initialKey === "reflection" ? 2 : 0;
 
   for (const incident of incidents) {
     if (key === "admin_review") continue;
@@ -973,8 +974,14 @@ function activeAdjustmentForStudent(studentId) {
 }
 
 function statusForStudent(studentId) {
-  const automaticStatus = automaticStatusForStudent(studentId);
   const activeAdjustment = activeAdjustmentForStudent(studentId);
+  if (activeAdjustment?.baseline_incident_id != null) {
+    const incidents = statements.incidentsForStatus.all(studentId, currentTerm().id)
+      .filter(incident => Number(incident.id) > Number(activeAdjustment.baseline_incident_id));
+    return statusFromIncidentHistory(incidents, activeAdjustment.target_step);
+  }
+  // Existing adjustments retain their original minimum-step behavior.
+  const automaticStatus = automaticStatusForStudent(studentId);
   const adjustmentStatus = activeAdjustment ? STATUS_DETAILS[activeAdjustment.target_step] : STATUS_DETAILS.no_violations;
   return adjustmentStatus.level > automaticStatus.level ? adjustmentStatus : automaticStatus;
 }
@@ -2295,34 +2302,27 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const targetStep = required(body.target_step, "Adjusted step");
     const targetStatus = STATUS_DETAILS[targetStep];
-    if (!targetStatus || !["monitor", "reflection", "success_contract", "device_restriction", "admin_review"].includes(targetStep)) {
+    if (!Object.hasOwn(STATUS_DETAILS, targetStep)) {
       return sendJson(res, 400, { error: "Choose a valid intervention step." });
     }
     const currentStatus = statusForStudent(id);
-    const automaticStatus = automaticStatusForStudent(id);
-    const activeAdjustment = activeAdjustmentForStudent(id);
-    if (targetStatus.level < automaticStatus.level) {
-      return sendJson(res, 400, { error: `The step cannot be set below the calculated minimum: ${automaticStatus.label}.` });
-    }
     if (targetStatus.key === currentStatus.key) {
       return sendJson(res, 400, { error: "Choose a different step." });
-    }
-    if (activeAdjustment && targetStatus.key === automaticStatus.key) {
-      return sendJson(res, 400, { error: "Use Return to calculated step to end the current override." });
     }
     const reason = required(body.reason, "Reason");
     const term = currentTerm();
     const session = getSession(req);
     const adjustedBy = session?.email || session?.name || "Unknown";
     const todayText = new Date().toISOString().slice(0, 10);
-    const result = statements.insertStepAdjustment.run(id, term.id, targetStep, reason, adjustedBy);
+    const baselineIncidentId = Number(prepare("SELECT MAX(id) AS id FROM incidents WHERE student_id = ? AND term_id = ?").get(id, term.id)?.id || 0);
+    const result = statements.insertStepAdjustment.run(id, term.id, targetStep, reason, adjustedBy, baselineIncidentId);
     const adjustmentId = Number(result.lastInsertRowid);
     statements.endActiveStepAdjustments.run(adjustedBy, `Superseded by adjustment #${adjustmentId}: ${reason}`, id, term.id, adjustmentId);
     if (targetStatus.level > currentStatus.level) {
       ensureWorkflowActions(id, null, todayText, currentStatus, targetStatus, adjustmentId);
     } else {
       reconcileOpenActionsForLowerStep(id, targetStatus, reason, todayText);
-      ensureWorkflowActions(id, null, todayText, automaticStatus, targetStatus, adjustmentId);
+      ensureWorkflowActions(id, null, todayText, STATUS_DETAILS.no_violations, targetStatus, adjustmentId);
       queueImmediateChromebookReturnIfNeeded(id, currentStatus, targetStatus, todayText);
     }
     statements.addAudit.run("step_adjustment", adjustmentId, `Step adjusted from ${currentStatus.label} to ${targetStatus.label} for ${student.first_name} ${student.last_name}.`);
@@ -2365,6 +2365,7 @@ async function handleApi(req, res, url) {
     statements.endActiveStepAdjustments.run(endedBy, reason, adjustment.student_id, adjustment.term_id, -1);
     const currentStatus = statusForStudent(adjustment.student_id);
     reconcileOpenActionsForLowerStep(adjustment.student_id, currentStatus, reason, todayText);
+    ensureWorkflowActions(adjustment.student_id, null, todayText, previousStatus, currentStatus);
     queueImmediateChromebookReturnIfNeeded(adjustment.student_id, previousStatus, currentStatus, todayText);
     statements.addAudit.run("step_adjustment", adjustmentId, `Administrative override ended by ${endedBy}. Current step: ${currentStatus.label}.`);
     return sendJson(res, 200, { ok: true, currentStatus });
@@ -2376,7 +2377,9 @@ async function handleApi(req, res, url) {
     if (!adjustment) return sendJson(res, 404, { error: "Step adjustment not found" });
     const body = await readBody(req);
     const linkedActions = statements.actionsForStepAdjustment.all(adjustmentId);
-    const legacyActions = statements.legacyActionsForStepAdjustment.all(adjustment.student_id, adjustment.created_at);
+    const legacyActions = adjustment.baseline_incident_id == null
+      ? statements.legacyActionsForStepAdjustment.all(adjustment.student_id, adjustment.created_at)
+      : [];
     const actions = [...new Map([...linkedActions, ...legacyActions].map(action => [Number(action.id), action])).values()];
     const actionDocuments = actions.flatMap(action => statements.documentsForAction.all(action.id));
     const completedCount = actions.filter(action => action.status === "complete").length;
@@ -2399,6 +2402,7 @@ async function handleApi(req, res, url) {
     statements.deleteStepAdjustment.run(adjustmentId);
     const currentStatus = statusForStudent(adjustment.student_id);
     const todayText = new Date().toISOString().slice(0, 10);
+    ensureWorkflowActions(adjustment.student_id, null, todayText, previousStatus, currentStatus);
     if (currentStatus.level < previousStatus.level) {
       reconcileOpenActionsForLowerStep(adjustment.student_id, currentStatus, "The adjustment was deleted as entered in error.", todayText);
       if (completedCount || actionDocuments.length) {

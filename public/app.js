@@ -1463,10 +1463,8 @@ function profileDocumentControls(student, isArchived) {
 }
 
 function stepAdjustmentOptions(student) {
-  const minimumLevel = statusLevels[student.automaticStatus?.key] ?? 0;
-  return ["monitor", "reflection", "success_contract", "device_restriction", "admin_review"]
-    .filter(key => statusLevels[key] >= minimumLevel && key !== student.status.key)
-    .filter(key => !student.activeAdjustment || key !== student.automaticStatus?.key)
+  return ["no_violations", "monitor", "reflection", "success_contract", "device_restriction", "admin_review"]
+    .filter(key => key !== student.status.key)
     .map(key => `<option value="${key}">${escapeHtml(statusLabels[key])}</option>`)
     .join("");
 }
@@ -1533,6 +1531,7 @@ function stepAdjustmentForm(student) {
         <div><span>Calculated step</span><strong>${escapeHtml(student.automaticStatus?.label || student.status.label)}</strong></div>
         <div><span>Administrative override</span><strong>${escapeHtml(activeAdjustment ? statusLabels[activeAdjustment.target_step] : "None")}</strong></div>
       </div>
+      <p class="panel-note">Move the current step up or down, including after Admin review. Violation history stays unchanged. New violations advance from the step you choose. Returning to the calculated step uses the full current-term violation history.</p>
       ${options ? `
         <label>
           Change current step to

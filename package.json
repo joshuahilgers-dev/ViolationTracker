@@ -4,6 +4,7 @@
   "private": true,
   "description": "Local school technology violation tracking app",
   "scripts": {
+    "test:steps": "node scripts/test-step-management.js",
     "test:restrictions": "node scripts/test-restrictions.js",
     "build": "node scripts/build-check.js",
     "test:documents": "node scripts/test-student-documents.js",
