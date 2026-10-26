@@ -1048,6 +1048,7 @@ function deviceRestrictionSupervisionForStudent(studentId, todayText = localDate
   const action = statements.currentRestrictionDateActionForStudent.get(studentId, term.id, term.id);
   const returnOn = action?.due_on || null;
   return {
+    chromebook_return_action_id: action?.id || null,
     chromebook_return_on: returnOn,
     device_restriction_supervision_state: !returnOn
       ? "needs_date"
@@ -1125,6 +1126,31 @@ function ensureWorkflowActions(studentId, incidentId, occurredOn, previousStatus
 
 function queueAction(studentId, incidentId, actionType, title, dueOn, owner, notes, stepAdjustmentId = null) {
   return statements.insertAction.run(studentId, incidentId, stepAdjustmentId, actionType, title, dueOn, owner, notes);
+}
+
+const CHROMEBOOK_DATE_ACTIONS = new Set(["device_restriction", "reentry_check", "return_chromebook"]);
+
+function chromebookDateActions(action) {
+  const actions = statements.actionsForStudent.all(action.student_id);
+  // Older adjustment-based return follow-ups were saved without their adjustment link.
+  // Recover that link only when the completed re-entry record is unambiguous.
+  for (const item of actions) {
+    if (item.action_type !== "return_chromebook" || item.incident_id || item.step_adjustment_id
+      || item.notes !== "Return the Chromebook to the student after the restriction period.") continue;
+    const sources = actions.filter(source => source.action_type === "reentry_check"
+      && source.step_adjustment_id && source.status === "complete"
+      && source.due_on === item.due_on && source.id < item.id
+      && source.completed_on === item.created_at.slice(0, 10));
+    if (sources.length === 1) {
+      item.step_adjustment_id = sources[0].step_adjustment_id;
+      prepare("UPDATE actions SET step_adjustment_id = ? WHERE id = ?").run(item.step_adjustment_id, item.id);
+    }
+  }
+  const anchor = actions.find(item => item.id === action.id) || action;
+  return actions.filter(item => CHROMEBOOK_DATE_ACTIONS.has(item.action_type)
+    && (anchor.incident_id ? item.incident_id === anchor.incident_id
+      : anchor.step_adjustment_id ? item.step_adjustment_id === anchor.step_adjustment_id
+        : item.id === anchor.id));
 }
 
 function ensureCurrentSuccessContractCheckInActions() {
@@ -2552,6 +2578,29 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { currentTerm: currentTerm() });
   }
 
+  const chromebookReturnDateMatch = url.pathname.match(/^\/api\/actions\/(\d+)\/return-date$/);
+  if (req.method === "PATCH" && chromebookReturnDateMatch) {
+    const actionId = Number(chromebookReturnDateMatch[1]);
+    const action = statements.getAction.get(actionId);
+    if (!action) return sendJson(res, 404, { error: "Follow-up not found" });
+    if (!CHROMEBOOK_DATE_ACTIONS.has(action.action_type)) {
+      return sendJson(res, 400, { error: "This follow-up does not use a Chromebook return date." });
+    }
+    const body = await readBody(req);
+    const returnDate = optionalDate(body.return_date, "Chromebook return date");
+    if (!returnDate || !Number.isFinite(Date.parse(`${returnDate}T12:00:00Z`))
+      || new Date(`${returnDate}T12:00:00Z`).toISOString().slice(0, 10) !== returnDate) {
+      return sendJson(res, 400, { error: "Choose a valid Chromebook return date." });
+    }
+    for (const linkedAction of chromebookDateActions(action)) {
+      if (linkedAction.due_on === returnDate) continue;
+      statements.updateActionDueDate.run(returnDate, linkedAction.id);
+      statements.addAudit.run("action", linkedAction.id,
+        `Chromebook return date changed from ${linkedAction.due_on || "not set"} to ${returnDate} by ${currentUser.email}.`);
+    }
+    return sendJson(res, 200, { ok: true, return_date: returnDate });
+  }
+
   const successContractCheckInMatch = url.pathname.match(/^\/api\/actions\/(\d+)\/check-in-through$/);
   if (req.method === "PATCH" && successContractCheckInMatch) {
     const actionId = Number(successContractCheckInMatch[1]);
@@ -2608,9 +2657,8 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: "Restriction end date is required." });
       }
       statements.updateStudentAssetTag.run(assetTag, action.student_id);
-      statements.updateActionDueDate.run(restrictionEndDate, actionId);
-      if (action.incident_id) {
-        statements.updateActionDueDateByIncidentType.run(restrictionEndDate, action.incident_id, "reentry_check");
+      for (const linkedAction of chromebookDateActions(action)) {
+        statements.updateActionDueDate.run(restrictionEndDate, linkedAction.id);
       }
       notes = notes || `Asset tag: ${assetTag}; restriction through ${restrictionEndDate}`;
     }
@@ -2620,7 +2668,9 @@ async function handleApi(req, res, url) {
       if (!returnDate) {
         return sendJson(res, 400, { error: "Return date is required." });
       }
-      statements.updateActionDueDate.run(returnDate, actionId);
+      for (const linkedAction of chromebookDateActions(action)) {
+        statements.updateActionDueDate.run(returnDate, linkedAction.id);
+      }
       notes = notes || `Chromebook return date: ${returnDate}`;
       queueAction(
         action.student_id,
@@ -2629,7 +2679,8 @@ async function handleApi(req, res, url) {
         "Return Chromebook to student",
         returnDate,
         "Library/Tech",
-        "Return the Chromebook to the student after the restriction period."
+        "Return the Chromebook to the student after the restriction period.",
+        action.step_adjustment_id
       );
     }
 

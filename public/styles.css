@@ -1796,6 +1796,11 @@ textarea {
   color: #92400e;
 }
 
+.chromebook-date-editor {
+  margin-top: 8px;
+}
+
+.chromebook-date-editor form,
 .current-step-timing form {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -1805,6 +1810,7 @@ textarea {
   margin-top: 10px;
 }
 
+.chromebook-date-editor form [role="status"],
 .current-step-timing form [role="status"] {
   grid-column: 1 / -1;
   color: var(--muted);
@@ -2649,10 +2655,12 @@ textarea {
     width: 100%;
   }
 
+  .chromebook-date-editor form,
   .current-step-timing form {
     grid-template-columns: 1fr;
   }
 
+  .chromebook-date-editor form [role="status"],
   .current-step-timing form [role="status"] {
     grid-column: auto;
   }

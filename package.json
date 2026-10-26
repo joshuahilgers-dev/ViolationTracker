@@ -4,6 +4,7 @@
   "private": true,
   "description": "Local school technology violation tracking app",
   "scripts": {
+    "test:return-dates": "node scripts/test-chromebook-return-dates.js",
     "test:steps": "node scripts/test-step-management.js",
     "test:restrictions": "node scripts/test-restrictions.js",
     "build": "node scripts/build-check.js",

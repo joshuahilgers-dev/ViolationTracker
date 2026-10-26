@@ -1030,6 +1030,7 @@ function actionCard(action) {
         </div>
         ${action.notes ? `<div class="meta">${escapeHtml(action.notes)}</div>` : ""}
         ${actionFields(action)}
+        ${["device_restriction", "reentry_check", "return_chromebook"].includes(action.action_type) ? chromebookReturnDateEditor(action.id, action.due_on) : ""}
         ${action.documents?.length ? documentList(action.documents) : ""}
       </div>
       <div class="row-actions">
@@ -1469,6 +1470,22 @@ function stepAdjustmentOptions(student) {
     .join("");
 }
 
+function chromebookReturnDateEditor(actionId, date) {
+  if (!actionId) return "";
+  return `
+    <details class="chromebook-date-editor">
+      <summary class="text-button">Edit return date</summary>
+      <form data-chromebook-return-date-form="${actionId}">
+        <label>Chromebook return date
+          <input type="date" name="return_date" value="${escapeHtml(date || "")}" required>
+        </label>
+        <button type="submit" class="quiet-button">Save date</button>
+        <span role="status"></span>
+      </form>
+    </details>
+  `;
+}
+
 function currentStepTiming(student) {
   if (student.status?.key !== "success_contract"
     || !student.success_contract_action_id
@@ -1481,6 +1498,7 @@ function currentStepTiming(student) {
         <strong>${date
           ? `${satisfied ? "Restriction period satisfied" : "Chromebook return scheduled"} ${escapeHtml(formatLongDate(date))}`
           : "Chromebook return date needed"}</strong>
+        ${chromebookReturnDateEditor(student.chromebook_return_action_id, date)}
       </div>
     `;
   }
@@ -2330,6 +2348,26 @@ async function endStepAdjustment(adjustmentId, studentId, label) {
   }
 }
 
+async function saveChromebookReturnDate(form) {
+  const actionId = Number(form.dataset.chromebookReturnDateForm);
+  const button = form.querySelector("button[type='submit']");
+  const message = form.querySelector("[role='status']");
+  button.disabled = true;
+  message.textContent = "Saving...";
+  try {
+    await api(`/api/actions/${actionId}/return-date`, {
+      method: "PATCH",
+      body: JSON.stringify({ return_date: form.elements.return_date.value })
+    });
+    await loadBootstrap();
+    if (state.selectedFollowupStudentId) await showFollowups(state.selectedFollowupStudentId);
+    if (state.selectedStudentId) await showStudentDetail(state.selectedStudentId);
+  } catch (error) {
+    message.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
 async function saveSuccessContractCheckInDate(form) {
   const actionId = Number(form.dataset.successContractDateForm);
   const field = form.elements.check_in_through;
@@ -3044,6 +3082,11 @@ document.addEventListener("submit", event => {
   if (contractDateForm) {
     event.preventDefault();
     saveSuccessContractCheckInDate(contractDateForm);
+  }
+  const returnDateForm = event.target.closest("[data-chromebook-return-date-form]");
+  if (returnDateForm) {
+    event.preventDefault();
+    saveChromebookReturnDate(returnDateForm);
   }
 });
 
