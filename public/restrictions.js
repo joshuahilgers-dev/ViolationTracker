@@ -13,6 +13,17 @@ function restrictionCard(item, editable = false) {
   </article>`;
 }
 
+function teacherRestrictionCard(item) {
+  return `
+    <button type="button" class="teacher-student-card" data-teacher-student-id="${item.student_id}" aria-label="View details for ${escapeHtml(item.first_name)} ${escapeHtml(item.last_name)}">
+      <h4>${escapeHtml(item.first_name)} ${escapeHtml(item.last_name)}</h4>
+      <div class="meta">${item.grade ? `<span>Grade ${escapeHtml(item.grade)}</span>` : ""}</div>
+      <span class="panel-note">Effective ${escapeHtml(formatDate(item.starts_on))} · ${item.ends_on ? `Through ${escapeHtml(formatDate(item.ends_on))} (inclusive)` : "Until manually ended"}</span>
+      <span class="panel-note restriction-notes">${escapeHtml(item.notes || "No notes added.")}</span>
+      <span class="panel-note">Select for details</span>
+    </button>`;
+}
+
 function updateRestrictionForm(entryType) {
   const form = els.incidentForm;
   const enabled = entryType === "restriction";
@@ -95,7 +106,16 @@ function renderTeacherRestrictions() {
     if (!groups.has(item.restriction_type_id)) groups.set(item.restriction_type_id, []);
     groups.get(item.restriction_type_id).push(item);
   }
-  document.querySelector("#teacher-restrictions").innerHTML = [...groups.values()].map(group => `<section class="panel restriction-group"><h3>${escapeHtml(group[0].label)} (${group.length})</h3>${group.map(item => restrictionCard(item)).join("")}</section>`).join("")
+  document.querySelector("#teacher-restrictions").innerHTML = [...groups.values()].map(group => `
+    <details class="panel restriction-group teacher-collapsible-section" ${query ? "open" : ""}>
+      <summary class="panel-heading teacher-disclosure-summary">
+        <h3>${escapeHtml(group[0].label)}</h3>
+        ${teacherDisclosureMeta("", group.length)}
+      </summary>
+      <div class="teacher-student-grid">
+        ${group.map(teacherRestrictionCard).join("")}
+      </div>
+    </details>`).join("")
     || '<div class="empty">No active restrictions match the selected search and grade filters.</div>';
 }
 
